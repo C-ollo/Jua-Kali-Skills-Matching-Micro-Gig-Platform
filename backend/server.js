@@ -6,10 +6,8 @@ const { Pool } = require('pg'); // PostgreSQL client
 const app = express();
 const PORT = process.env.PORT || 5000; // Use port from .env or default to 5000
 
-// Middleware to parse JSON bodies from incoming requests
-app.use(express.json());
-app.use(cors());
 // --- Database Connection ---
+// Instantiate pool ONCE here, after dotenv is loaded
 const pool = new Pool({
     user: process.env.DB_USER,
     host: process.env.DB_HOST,
@@ -21,7 +19,18 @@ const pool = new Pool({
 // Test database connection
 pool.connect()
     .then(() => console.log('Connected to PostgreSQL database!'))
-    .catch(err => console.error('Database connection error', err.stack));
+    .catch(err => console.error('Database connection error:', err.stack));
+
+
+// Import auth routes and pass the pool
+const authRoutes = require('./routes/authRoutes')(pool); // Pass pool here
+
+// Middleware to parse JSON bodies from incoming requests
+app.use(express.json());
+app.use(cors());
+
+// Use auth routes
+app.use('/api/auth', authRoutes);
 
 
 // --- Define a simple API route for testing ---
@@ -32,15 +41,13 @@ app.get('/', (req, res) => {
 // Example: A route to fetch data from the database (placeholder for now)
 app.get('/api/test-db', async (req, res) => {
     try {
-        // This is just an example, assumes a table named 'users' exists for now
-        // We'll define schemas later.
         const result = await pool.query('SELECT NOW()');
         res.json({
             message: 'Fetched current time from DB!',
             currentTime: result.rows[0].now
         });
     } catch (err) {
-        console.error('Error executing query', err.stack);
+        console.error('Error executing /api/test-db query:', err.stack);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
