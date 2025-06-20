@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-
+const auth = require('../middleware/authMiddleware');
 // jwtSecret will be accessed directly from process.env, which is loaded in server.js
 const jwtSecret = process.env.JWT_SECRET;
 
@@ -174,6 +174,48 @@ router.post('/login', async (req, res) => {
     } catch (err) {
         console.error('Error during login:', err.message);
         res.status(500).json({ msg: 'Server error' });
+    }
+});
+
+router.get('/me', auth, async (req, res) => { // <--- ADD THIS NEW ROUTE
+    try {
+        // req.user is populated by the auth middleware
+        // We'll fetch the user from the DB to ensure we have the latest info
+        // and to avoid sending hashed password or sensitive data from token payload directly
+        const userResult = await pool.query(
+            'SELECT id, full_name, email, phone_number, user_type, location, profile_picture_url, created_at FROM users WHERE id = $1',
+            [req.user.id] // Access user ID from the token payload
+        );
+
+        const user = userResult.rows[0];
+
+        if (!user) {
+            return res.status(404).json({ msg: 'User not found' });
+        }
+
+        // If user is an artisan, fetch artisan_details as well
+        if (user.user_type === 'artisan') {
+            const artisanDetailsResult = await pool.query(
+                'SELECT bio, average_rating, total_reviews, is_available, years_experience FROM artisan_details WHERE user_id = $1',
+                [user.id]
+            );
+            user.artisan_details = artisanDetailsResult.rows[0];
+
+            // Fetch artisan's skills
+            const artisanSkillsResult = await pool.query(
+                `SELECT s.name
+                 FROM artisan_skills as_
+                 JOIN skills s ON as_.skill_id = s.id
+                 WHERE as_.artisan_id = $1`,
+                [user.id]
+            );
+            user.skills = artisanSkillsResult.rows.map(row => row.name);
+        }
+
+        res.json(user); // Send back the user data
+    } catch (err) {
+        console.error('Error fetching user profile:', err.message);
+        res.status(500).send('Server Error');
     }
 });
 
