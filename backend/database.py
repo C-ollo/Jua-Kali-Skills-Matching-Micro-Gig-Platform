@@ -6,6 +6,7 @@ load_dotenv()
 # Create a connection pool
 # It's generally better to use a threaded or simple connection pool
 # depending on your async patterns. For basic FastAPI setup, a simple one is fine.
+db_pool = None 
 try:
     db_pool = pool.SimpleConnectionPool(
         minconn=1,
