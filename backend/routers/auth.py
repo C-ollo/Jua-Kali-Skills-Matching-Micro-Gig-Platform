@@ -1,8 +1,8 @@
 # backend/routers/auth.py
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Depends, status
-from schemas import RegisterUser, LoginUser, UserProfile, UserBase # Import your Pydantic models
-from database import get_db_connection, put_db_connection # Import DB utilities
+from ..schemas import RegisterUser, LoginUser, UserProfile, UserBase, ArtisanDetails # Import your Pydantic models
+from ..database import get_db_connection, put_db_connection # Import DB utilities
 import os
 from fastapi.security import OAuth2PasswordBearer
 from passlib.context import CryptContext # For password hashing
@@ -253,3 +253,120 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
             put_db_connection(conn)
 
           
+# This function will be used as a dependency to protect routes
+async def get_current_user(token: str = Depends(oauth2_scheme)):
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    conn = None # Initialize conn to None
+    try:
+        # Decode the JWT token
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id: int = payload.get("user_id")
+        if user_id is None:
+            raise credentials_exception
+
+        # You can also get user_type and email from payload if needed
+        # user_type: str = payload.get("user_type")
+        # email: str = payload.get("email")
+
+        # Fetch user from database
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Fetch basic user data
+        cursor.execute(
+            "SELECT id, full_name, email, phone_number, user_type, location FROM users WHERE id = %s",
+            (user_id,)
+        )
+        user_row = cursor.fetchone()
+        if user_row is None:
+            raise credentials_exception
+
+        # Convert row to UserBase schema for consistency
+        current_user_base = UserBase(
+            id=user_row[0],
+            full_name=user_row[1],
+            email=user_row[2],
+            phone_number=user_row[3],
+            user_type=user_row[4],
+            location=user_row[5]
+        )
+
+        # Return the UserBase object (or a more complete UserProfile later)
+        return current_user_base
+
+    except JWTError:
+        raise credentials_exception
+    except Exception as e:
+        print(f"Error in get_current_user: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Server error during authentication")
+    finally:
+        if conn:
+            put_db_connection(conn)
+
+@router.get("/me", response_model=UserProfile) # Specify the response model
+async def read_users_me(current_user: UserBase = Depends(get_current_user)):
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        user_id = current_user.id
+        user_type = current_user.user_type
+
+        artisan_details = None
+        skills_list = []
+
+        if user_type == 'artisan':
+            # Fetch artisan details
+            cursor.execute(
+                """
+                SELECT bio, years_experience, average_rating, total_reviews, is_available
+                FROM artisan_details WHERE user_id = %s
+                """,
+                (user_id,)
+            )
+            artisan_row = cursor.fetchone()
+            if artisan_row:
+                artisan_details = ArtisanDetails(
+                    bio=artisan_row[0],
+                    years_experience=artisan_row[1],
+                    average_rating=artisan_row[2],
+                    total_reviews=artisan_row[3],
+                    is_available=artisan_row[4]
+                )
+
+            # Fetch skills
+            cursor.execute(
+                """
+                SELECT s.name FROM skills s
+                JOIN artisan_skills ass ON s.id = ass.skill_id
+                WHERE ass.artisan_id = %s
+                """,
+                (user_id,)
+            )
+            skill_rows = cursor.fetchall()
+            skills_list = [skill[0] for skill in skill_rows]
+
+        # Construct the UserProfile response
+        # Note: We need to convert the current_user (UserBase) to a dict
+        # or directly assign its attributes to match UserProfile structure
+        # when constructing the final response.
+        # Using current_user.model_dump() is a Pydantic V2 way to get dict.
+        user_profile_data = current_user.model_dump() # Pydantic V2 method
+        user_profile_data["artisan_details"] = artisan_details
+        user_profile_data["skills"] = skills_list
+
+        return UserProfile(**user_profile_data) # Unpack dictionary into UserProfile Pydantic model
+
+    except HTTPException:
+        raise # Re-raise HTTP exceptions (e.g., from get_current_user)
+    except Exception as e:
+        print(f"Error fetching user profile: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Server error fetching profile")
+    finally:
+        if conn:
+            put_db_connection(conn)

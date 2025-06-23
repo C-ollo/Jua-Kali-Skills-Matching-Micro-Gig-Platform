@@ -1,6 +1,6 @@
 from fastapi import FastAPI
-from database import get_db_connection, close_db_pool, put_db_connection
-from routers import auth
+from .database import get_db_connection, close_db_pool, put_db_connection
+from .routers import auth
 
 # For CORS
 from fastapi.middleware.cors import CORSMiddleware
