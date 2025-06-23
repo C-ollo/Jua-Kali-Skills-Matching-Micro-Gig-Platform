@@ -1,12 +1,16 @@
 # backend/routers/auth.py
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Depends, status
-from schemas import RegisterUser, LoginUser, UserProfile # Import your Pydantic models
+from schemas import RegisterUser, LoginUser, UserProfile, UserBase # Import your Pydantic models
 from database import get_db_connection, put_db_connection # Import DB utilities
 import os
+from fastapi.security import OAuth2PasswordBearer
 from passlib.context import CryptContext # For password hashing
 from jose import JWTError, jwt # For JWT handling
 from datetime import datetime, timedelta, timezone # For token expiration
+
+# OAuth2 scheme for JWT token extraction
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/login")
 
 # Password hashing context (bcrypt)
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -192,4 +196,60 @@ async def login_for_access_token(form_data: LoginUser): # Using LoginUser schema
     finally:
         if conn:
             put_db_connection(conn)
+
+
+# This function will be used as a dependency to protect routes
+async def get_current_user(token: str = Depends(oauth2_scheme)):
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    conn = None # Initialize conn to None
+    try:
+        # Decode the JWT token
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id: int = payload.get("user_id")
+        if user_id is None:
+            raise credentials_exception
+
+        # You can also get user_type and email from payload if needed
+        # user_type: str = payload.get("user_type")
+        # email: str = payload.get("email")
+
+        # Fetch user from database
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Fetch basic user data
+        cursor.execute(
+            "SELECT id, full_name, email, phone_number, user_type, location FROM users WHERE id = %s",
+            (user_id,)
+        )
+        user_row = cursor.fetchone()
+        if user_row is None:
+            raise credentials_exception
+
+        # Convert row to UserBase schema for consistency
+        current_user_base = UserBase(
+            id=user_row[0],
+            full_name=user_row[1],
+            email=user_row[2],
+            phone_number=user_row[3],
+            user_type=user_row[4],
+            location=user_row[5]
+        )
+
+        # Return the UserBase object (or a more complete UserProfile later)
+        return current_user_base
+
+    except JWTError:
+        raise credentials_exception
+    except Exception as e:
+        print(f"Error in get_current_user: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Server error during authentication")
+    finally:
+        if conn:
+            put_db_connection(conn)
+
           
