@@ -2,9 +2,13 @@
 
 from pydantic import BaseModel, EmailStr, Field
 from typing import List, Optional
-
+from enum import Enum
+from datetime import datetime
 # --- Models for Request Bodies ---
 
+class UserType(str, Enum):
+    client = "client"
+    artisan = "artisan"
 class RegisterUser(BaseModel):
     full_name: str = Field(..., min_length=1)
     email: EmailStr # Pydantic's EmailStr provides basic email validation
@@ -53,3 +57,31 @@ class UserProfile(UserBase):
     # Inherits fields from UserBase
     artisan_details: Optional[ArtisanDetails] = None
     skills: Optional[List[str]] = None
+
+class JobStatus(str, Enum):
+    open = "open"
+    assigned = "assigned"
+    in_progress = "in_progress"
+    completed = "completed"
+    cancelled = "cancelled"
+
+class JobBase(BaseModel):
+    title: str
+    description: str
+    location: str # Or a more complex Location model later
+    budget: float
+    required_skills: List[str] = [] # Skills needed for the job
+    status: JobStatus = JobStatus.open # Default status when created
+
+class JobCreate(JobBase):
+    # All fields from JobBase are inherited.
+    # Add any fields specific only to creation if needed, otherwise this can be empty.
+    pass
+
+class JobResponse(JobBase):
+    id: int
+    client_id: int # The ID of the user (client) who posted the job
+    created_at: datetime # When the job was posted
+
+    class Config:
+        from_attributes = True # Changed from orm_mode=True for Pydantic V2    

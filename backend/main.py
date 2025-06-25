@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from .database import get_db_connection, close_db_pool, put_db_connection
-from .routers import auth, skill, artisan
+from .routers import auth, skill, artisan, job
 
 # For CORS
 from fastapi.middleware.cors import CORSMiddleware
@@ -55,3 +55,4 @@ async def read_root():
 app.include_router(auth.router)
 app.include_router(skill.router)
 app.include_router(artisan.router)
+app.include_router(job.router)
