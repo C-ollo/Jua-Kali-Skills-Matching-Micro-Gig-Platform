@@ -85,3 +85,50 @@ class JobResponse(JobBase):
 
     class Config:
         from_attributes = True # Changed from orm_mode=True for Pydantic V2    
+
+class JobApplicationStatus(str, Enum):
+    pending = "pending"
+    accepted = "accepted"
+    rejected = "rejected"
+    withdrawn = "withdrawn" # Optional: if an artisan withdraws application
+
+class JobApplicationBase(BaseModel):
+    # job_id: int
+    bid_amount: Optional[float] = None # Optional: Artisan can bid a price
+    message: Optional[str] = None     # Optional: Message to the client
+
+class JobApplicationCreate(JobApplicationBase):
+    pass # All fields from JobApplicationBase are used for creation
+
+class JobApplicationResponse(JobApplicationBase):
+    id: int
+    artisan_id: int # The ID of the artisan who applied
+    status: JobApplicationStatus = JobApplicationStatus.pending
+    created_at: datetime
+
+    class Config:
+        from_attributes = True # Pydantic V2      
+
+
+class ArtisanApplicationDetails(BaseModel):
+    id: int
+    full_name: str
+    email: str
+    phone_number: str
+    location: str
+    bio: Optional[str] = None # Include bio for quick artisan summary
+    years_experience: Optional[int] = None # Include experience
+
+class JobApplicationDetailResponse(BaseModel):
+    id: int
+    job_id: int
+    artisan_id: int
+    bid_amount: Optional[float] = None
+    message: Optional[str] = None
+    status: JobApplicationStatus
+    created_at: datetime
+    # Add artisan details for the client to view
+    artisan: ArtisanApplicationDetails # Nested Pydantic model
+
+    class Config:
+        from_attributes = True          

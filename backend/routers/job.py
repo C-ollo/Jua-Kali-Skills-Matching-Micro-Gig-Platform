@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, HTTPException, Depends, status
 from backend.database import get_db_connection, put_db_connection
-from backend.schemas import JobCreate, JobResponse, UserBase, UserType, JobStatus
+from backend.schemas import *
 from backend.routers.auth import get_current_user # To get the authenticated user
 from psycopg2.extras import execute_values
 from typing import List
@@ -346,6 +346,84 @@ async def delete_job(
         conn.rollback()
         print(f"Error deleting job {job_id}: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to delete job due to server error")
+    finally:
+        if conn:
+            put_db_connection(conn)
+
+@router.post("/{job_id}/apply", response_model=JobApplicationResponse, status_code=status.HTTP_201_CREATED)
+async def apply_for_job(
+    job_id: int,
+    application_data: JobApplicationCreate,
+    current_user: UserBase = Depends(get_current_user)
+):
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # 1. Authorization Check: Only Artisans can apply
+        if current_user.user_type != UserType.artisan:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only artisans can apply for jobs."
+            )
+
+        # 2. Check if the job exists and is 'open'
+        cursor.execute("SELECT status FROM jobs WHERE id = %s", (job_id,))
+        job_row = cursor.fetchone()
+
+        if job_row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found.")
+
+        job_status = job_row[0]
+        if job_status != JobStatus.open.value: # Check against the value of the enum
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Job is not open for applications. Current status: {job_status}"
+            )
+
+        # 3. Check if artisan has already applied to this job (UNIQUE constraint handles this, but explicit check provides better error message)
+        cursor.execute(
+            "SELECT id FROM job_applications WHERE job_id = %s AND artisan_id = %s",
+            (job_id, current_user.id)
+        )
+        if cursor.fetchone():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, # 409 Conflict indicates a duplicate resource
+                detail="You have already applied for this job."
+            )
+
+        # 4. Insert the job application
+        cursor.execute(
+            """
+            INSERT INTO job_applications (job_id, artisan_id, bid_amount, message, status)
+            VALUES (%s, %s, %s, %s, %s) RETURNING id, created_at
+            """,
+            (job_id, current_user.id, application_data.bid_amount,
+             application_data.message, JobApplicationStatus.pending.value)
+        )
+        application_id, created_at = cursor.fetchone()
+
+        conn.commit()
+
+        # 5. Prepare JobApplicationResponse
+        return JobApplicationResponse(
+            id=application_id,
+            job_id=job_id,
+            artisan_id=current_user.id,
+            bid_amount=application_data.bid_amount,
+            message=application_data.message,
+            status=JobApplicationStatus.pending,
+            created_at=created_at
+        )
+
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception as e:
+        conn.rollback()
+        print(f"Error applying for job {job_id} by artisan {current_user.id}: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to submit application due to server error")
     finally:
         if conn:
             put_db_connection(conn)
