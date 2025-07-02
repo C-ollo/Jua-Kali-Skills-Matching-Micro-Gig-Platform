@@ -2,7 +2,9 @@
 
 from fastapi import APIRouter, HTTPException, status, Depends
 from backend.database import get_db_connection, put_db_connection
-from backend.schemas import UserProfile, ArtisanDetails, UserBase # Import relevant schemas
+from backend.routers.auth import get_current_user 
+from backend.schemas import *# Import relevant schemas
+from psycopg2.extras import execute_values 
 from typing import List, Optional # Import Optional for fields that might be None
 
 router = APIRouter(
@@ -164,4 +166,152 @@ async def get_artisan_by_id(artisan_id: int):
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Server error fetching artisan profile")
     finally:
         if conn:
-            put_db_connection(conn)            
+            put_db_connection(conn)
+
+@router.put("/me", response_model=UserProfile)
+async def update_my_artisan_profile(
+    artisan_details_update: ArtisanDetailsUpdate,
+    current_user: UserBase = Depends(get_current_user)
+):
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # 1. Authorization Check: Only Artisans can update their artisan profile
+        if current_user.user_type != UserType.artisan:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only artisans can update their artisan profile."
+            )
+
+        # 2. Update artisan_details (UPSERT logic)
+        update_fields = []
+        update_values = []
+
+        if artisan_details_update.bio is not None:
+            update_fields.append("bio = %s")
+            update_values.append(artisan_details_update.bio)
+        if artisan_details_update.years_experience is not None:
+            update_fields.append("years_experience = %s")
+            update_values.append(artisan_details_update.years_experience)
+
+        if update_fields:
+            # Build UPSERT query for artisan_details table
+            # Check if artisan_details already exists for this user_id
+            cursor.execute("SELECT user_id FROM artisan_details WHERE user_id = %s", (current_user.id,))
+            existing_details = cursor.fetchone()
+
+            if existing_details:
+                # Update existing details
+                update_values.append(current_user.id)
+                query = f"UPDATE artisan_details SET {', '.join(update_fields)}, updated_at = CURRENT_TIMESTAMP WHERE user_id = %s;"
+                cursor.execute(query, update_values)
+            else:
+                # Insert new details if they don't exist
+                # This means we need the user_id for insert, plus potentially bio and years_experience
+                insert_fields = ["user_id"]
+                insert_placeholders = ["%s"]
+                insert_values = [current_user.id]
+
+                if artisan_details_update.bio is not None:
+                    insert_fields.append("bio")
+                    insert_placeholders.append("%s")
+                    insert_values.append(artisan_details_update.bio)
+                if artisan_details_update.years_experience is not None:
+                    insert_fields.append("years_experience")
+                    insert_placeholders.append("%s")
+                    insert_values.append(artisan_details_update.years_experience)
+
+                if len(insert_fields) > 1: # If at least one detail is provided besides user_id
+                    query = f"INSERT INTO artisan_details ({', '.join(insert_fields)}) VALUES ({', '.join(insert_placeholders)});"
+                    cursor.execute(query, insert_values)
+
+
+        # 3. Update artisan_skills (Delete existing, then re-insert new ones)
+        if artisan_details_update.skills is not None:
+            # First, delete all existing skills for this artisan
+            cursor.execute("DELETE FROM artisan_skills WHERE artisan_id = %s", (current_user.id,))
+
+            # Then, insert the new skills
+            if artisan_details_update.skills:
+                found_skill_ids = []
+                invalid_skills = []
+
+                for skill_name in artisan_details_update.skills:
+                    cursor.execute("SELECT id FROM skills WHERE name = %s", (skill_name,))
+                    skill_row = cursor.fetchone()
+                    if skill_row:
+                        found_skill_ids.append(skill_row[0])
+                    else:
+                        invalid_skills.append(skill_name)
+
+                if invalid_skills:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"The following skills are not recognized: {', '.join(invalid_skills)}. Please choose from available skills."
+                    )
+
+                # Use execute_values for batch insertion
+                artisan_skill_values = [(current_user.id, skill_id) for skill_id in found_skill_ids]
+                execute_values(cursor,
+                    "INSERT INTO artisan_skills (artisan_id, skill_id) VALUES %s",
+                    artisan_skill_values
+                )
+
+        conn.commit()
+
+        # 4. Fetch and return the complete updated ArtisanProfileResponse
+        # Re-use logic from get_artisan_by_id or construct it fully
+        cursor.execute(
+            """
+            SELECT
+                u.id, u.full_name, u.email, u.phone_number, u.location, u.user_type, u.created_at,
+                ad.bio, ad.years_experience,
+                ARRAY_AGG(s.name ORDER BY s.name) AS skill_names
+            FROM users u
+            LEFT JOIN artisan_details ad ON u.id = ad.user_id
+            LEFT JOIN artisan_skills ars ON u.id = ars.artisan_id
+            LEFT JOIN skills s ON ars.skill_id = s.id
+            WHERE u.id = %s
+            GROUP BY u.id, u.full_name, u.email, u.phone_number, u.location, u.user_type, u.created_at, ad.bio, ad.years_experience;
+            """,
+            (current_user.id,)
+        )
+        artisan_row = cursor.fetchone()
+
+        if artisan_row is None: # Should not happen if current_user is valid
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to retrieve updated artisan data.")
+
+        (user_id, full_name, email, phone_number, location, user_type_str, created_at,
+         bio, years_experience, skill_names_array) = artisan_row
+
+        parsed_skills = [s for s in (skill_names_array if skill_names_array else []) if s is not None]
+
+        return UserProfile(
+            id=user_id,
+            full_name=full_name,
+            email=email,
+            phone_number=phone_number,
+            location=location,
+            user_type=UserType(user_type_str),
+            created_at=created_at,
+            artisan_details=ArtisanDetails(
+                bio=bio,
+                years_experience=years_experience,
+                # average_rating, total_reviews, is_available are not handled in this update,
+                # so they will be None or default as per schema
+            ),
+            skills=parsed_skills
+        )
+
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception as e:
+        conn.rollback()
+        print(f"Error updating artisan profile {current_user.id}: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update artisan profile due to server error.")
+    finally:
+        if conn:
+            put_db_connection(conn)

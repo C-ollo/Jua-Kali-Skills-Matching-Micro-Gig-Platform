@@ -82,6 +82,7 @@ class JobResponse(JobBase):
     id: int
     client_id: int # The ID of the user (client) who posted the job
     created_at: datetime # When the job was posted
+    assigned_artisan_id: Optional[int] = None
 
     class Config:
         from_attributes = True # Changed from orm_mode=True for Pydantic V2    
@@ -131,4 +132,61 @@ class JobApplicationDetailResponse(BaseModel):
     artisan: ArtisanApplicationDetails # Nested Pydantic model
 
     class Config:
-        from_attributes = True          
+        from_attributes = True
+
+class ApplicationStatusUpdate(BaseModel):
+    status: JobApplicationStatus # Only allow updating the status
+
+
+class ClientForApplicationResponse(BaseModel):
+    id: int
+    full_name: str
+    location: str
+    email: str # Include email for communication
+
+class JobForApplicationResponse(BaseModel):
+    id: int
+    title: str
+    description: str
+    location: str
+    budget: float
+    status: JobStatus # The job's current status
+    created_at: datetime
+    client: ClientForApplicationResponse # Nested Client details
+
+    class Config:
+        from_attributes = True
+
+class ArtisanApplicationListResponse(BaseModel):
+    id: int # Application ID
+    job_id: int
+    bid_amount: Optional[float] = None
+    message: Optional[str] = None
+    status: JobApplicationStatus # Application status (pending, accepted, rejected)
+    created_at: datetime
+    job: JobForApplicationResponse # Nested Job details
+
+    class Config:
+        from_attributes = True
+
+        
+class UserUpdate(BaseModel):
+    full_name: Optional[str] = None
+    email: Optional[EmailStr] = None # Ensure EmailStr is imported from pydantic
+    phone_number: Optional[str] = None
+    location: Optional[str] = None
+    # Password not updated here, usually a separate endpoint
+
+class ArtisanDetailsUpdate(BaseModel):
+    bio: Optional[str] = None
+    years_experience: Optional[int] = None
+    skills: Optional[List[str]] = None # List of skill names to update 
+
+class JobsListResponse(BaseModel):
+    jobs: List[JobResponse]
+    total_count: int
+    page: int
+    size: int
+
+    class Config:
+        from_attributes = True

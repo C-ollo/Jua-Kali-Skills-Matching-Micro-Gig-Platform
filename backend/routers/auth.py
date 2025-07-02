@@ -1,7 +1,7 @@
 # backend/routers/auth.py
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Depends, status
-from ..schemas import RegisterUser, LoginUser, UserProfile, UserBase, ArtisanDetails # Import your Pydantic models
+from ..schemas import *# Import your Pydantic models
 from ..database import get_db_connection, put_db_connection # Import DB utilities
 import os
 from fastapi.security import OAuth2PasswordBearer
@@ -370,3 +370,72 @@ async def read_users_me(current_user: UserBase = Depends(get_current_user)):
     finally:
         if conn:
             put_db_connection(conn)
+
+@router.put("/me", response_model=UserBase) # Return updated basic user info
+async def update_my_profile(
+    user_update: UserUpdate,
+    current_user: UserBase = Depends(get_current_user)
+):
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        update_fields = []
+        update_values = []
+
+        # Check and prepare updates for each optional field
+        if user_update.full_name is not None:
+            update_fields.append("full_name = %s")
+            update_values.append(user_update.full_name)
+        if user_update.email is not None:
+            # Check for existing email if user is trying to change it
+            if user_update.email != current_user.email:
+                cursor.execute("SELECT id FROM users WHERE email = %s AND id != %s", (user_update.email, current_user.id))
+                if cursor.fetchone():
+                    raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered by another user.")
+            update_fields.append("email = %s")
+            update_values.append(user_update.email)
+        if user_update.phone_number is not None:
+            update_fields.append("phone_number = %s")
+            update_values.append(user_update.phone_number)
+        if user_update.location is not None:
+            update_fields.append("location = %s")
+            update_values.append(user_update.location)
+
+        if not update_fields:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No fields provided for update.")
+
+        update_values.append(current_user.id) # Add current user's ID for WHERE clause
+
+        query = f"UPDATE users SET {', '.join(update_fields)}, updated_at = CURRENT_TIMESTAMP WHERE id = %s RETURNING id, full_name, email, phone_number, location, user_type, created_at;"
+        cursor.execute(query, update_values)
+        updated_user_row = cursor.fetchone()
+
+        if updated_user_row is None: # Should not happen if current_user.id is valid
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to retrieve updated user data.")
+
+        conn.commit()
+
+        # Return the updated UserBase object
+        (user_id, full_name, email, phone_number, location, user_type_str, created_at) = updated_user_row
+        return UserBase(
+            id=user_id,
+            full_name=full_name,
+            email=email,
+            phone_number=phone_number,
+            location=location,
+            user_type=UserType(user_type_str),
+            created_at=created_at
+        )
+
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception as e:
+        conn.rollback()
+        print(f"Error updating user profile {current_user.id}: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update profile due to server error.")
+    finally:
+        if conn:
+            put_db_connection(conn)            
