@@ -375,3 +375,45 @@ async def update_my_artisan_profile(
     finally:
         if conn:
             put_db_connection(conn)
+
+@router.get("/{artisan_id}/reviews", response_model=List[ReviewResponse])
+async def get_reviews_for_artisan(
+    artisan_id: int,
+    current_user: UserBase = Depends(get_current_user) # Authentication is still required
+):
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Optional: Check if artisan_id exists and is actually an artisan
+        cursor.execute("SELECT user_type FROM users WHERE id = %s", (artisan_id,))
+        user_type_row = cursor.fetchone()
+        if not user_type_row or UserType(user_type_row[0]) != UserType.artisan:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artisan not found.")
+
+        cursor.execute(
+            "SELECT id, job_id, client_id, artisan_id, rating, comment, created_at, updated_at FROM job_reviews WHERE artisan_id = %s ORDER BY created_at DESC",
+            (artisan_id,)
+        )
+        review_rows = cursor.fetchall()
+
+        reviews_list = []
+        for row in review_rows:
+            (id, job_id, client_id, reviewed_artisan_id, rating, comment, created_at, updated_at) = row
+            reviews_list.append(
+                ReviewResponse(
+                    id=id, job_id=job_id, client_id=client_id, artisan_id=reviewed_artisan_id,
+                    rating=rating, comment=comment, created_at=created_at, updated_at=updated_at
+                )
+            )
+        return reviews_list
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error fetching reviews for artisan {artisan_id}: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Server error fetching reviews.")
+    finally:
+        if conn:
+            put_db_connection(conn)            

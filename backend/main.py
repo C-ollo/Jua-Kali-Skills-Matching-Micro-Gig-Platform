@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from .database import get_db_connection, close_db_pool, put_db_connection
-from .routers import auth, skill, artisan, job
+from .routers import auth, skill, artisan, job, reviews
 
 # For CORS
 from fastapi.middleware.cors import CORSMiddleware
@@ -56,3 +56,5 @@ app.include_router(auth.router)
 app.include_router(skill.router)
 app.include_router(artisan.router)
 app.include_router(job.router)
+app.include_router(reviews.router)
+

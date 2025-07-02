@@ -46,9 +46,12 @@ class UserBase(BaseModel):
 class ArtisanDetails(BaseModel):
     bio: Optional[str] = None
     years_experience: Optional[int] = None
-    average_rating: Optional[float] = None
-    total_reviews: Optional[int] = None
+    average_rating: Optional[float] = None # Ensure this is present
+    total_reviews: Optional[int] = None    # Ensure this is present
     is_available: Optional[bool] = True
+
+    class Config:
+        from_attributes = True
 
     class Config:
         from_attributes = True
@@ -199,3 +202,21 @@ class ArtisansListResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+class ReviewCreate(BaseModel):
+    job_id: int = Field(..., description="The ID of the job being reviewed")
+    rating: int = Field(..., ge=1, le=5, description="Rating from 1 to 5")
+    comment: Optional[str] = Field(None, max_length=500, description="Optional text comment for the review")
+
+class ReviewResponse(BaseModel):
+    id: int
+    job_id: int
+    client_id: int
+    artisan_id: int
+    rating: int
+    comment: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime # Ensure this is present
+
+    class Config:
+        from_attributes = True     
