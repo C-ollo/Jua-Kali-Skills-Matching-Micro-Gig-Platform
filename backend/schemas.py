@@ -190,3 +190,12 @@ class JobsListResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+class ArtisansListResponse(BaseModel):
+    artisans: List[UserProfile] # List of full artisan profiles
+    total_count: int
+    page: int
+    size: int
+
+    class Config:
+        from_attributes = True

@@ -1,6 +1,6 @@
 # backend/routers/artisan.py
 
-from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi import APIRouter, HTTPException, status, Depends, Query
 from backend.database import get_db_connection, put_db_connection
 from backend.routers.auth import get_current_user 
 from backend.schemas import *# Import relevant schemas
@@ -12,75 +12,135 @@ router = APIRouter(
     tags=["Artisans"]        # For API documentation
 )
 
-@router.get("/", response_model=List[UserProfile]) # Will return a list of UserProfile objects
-async def get_all_artisans():
+@router.get("/", response_model=ArtisansListResponse) # <--- Change response_model here
+async def get_all_artisans(
+    location: Optional[str] = Query(None, description="Filter artisans by location"),
+    skills: Optional[str] = Query(None, description="Comma-separated list of skills (e.g., 'Plumbing,Electrical')"),
+    min_years_experience: Optional[int] = Query(None, ge=0, description="Minimum years of experience for the artisan"),
+    page: int = Query(1, ge=1, description="Page number for pagination"),
+    size: int = Query(10, ge=1, le=100, description="Number of items per page"),
+    current_user: UserBase = Depends(get_current_user) # Keep authentication
+):
     conn = None
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
 
-        # Query to fetch all artisans with their details and skills
-        cursor.execute(
-            """
+        # Base query parts for artisan profiles (joining users, artisan_details, and skills)
+        # This complex query selects all details needed for UserProfile
+        main_query_base = """
             SELECT
-                u.id, u.full_name, u.email, u.phone_number, u.location, u.user_type,
-                ad.bio, ad.years_experience, ad.average_rating, ad.total_reviews, ad.is_available,
-                ARRAY_AGG(s.name ORDER BY s.name) AS skills_array
+                u.id, u.full_name, u.email, u.phone_number, u.location, u.user_type, u.created_at,
+                ad.bio, ad.years_experience,
+                ARRAY_AGG(s.name ORDER BY s.name) FILTER (WHERE s.name IS NOT NULL) AS skill_names
             FROM users u
             LEFT JOIN artisan_details ad ON u.id = ad.user_id
-            LEFT JOIN artisan_skills ass ON u.id = ass.artisan_id
-            LEFT JOIN skills s ON ass.skill_id = s.id
-            WHERE u.user_type = 'artisan'
-            GROUP BY u.id, ad.bio, ad.years_experience, ad.average_rating, ad.total_reviews, ad.is_available
-            ORDER BY u.full_name;
-            """
-        )
+            LEFT JOIN artisan_skills ars ON u.id = ars.artisan_id
+            LEFT JOIN skills s ON ars.skill_id = s.id
+        """
+
+        count_query_base = "SELECT COUNT(DISTINCT u.id) FROM users u"
+
+        # Filter conditions and parameters
+        where_clauses = ["u.user_type = 'artisan'"] # Always filter for artisans
+        query_params = []
+
+        if location:
+            where_clauses.append("u.location ILIKE %s")
+            query_params.append(f"%{location}%")
+        if min_years_experience is not None:
+            # Filter by years_experience. Assumes artisan_details might not exist for all.
+            where_clauses.append("ad.years_experience >= %s")
+            query_params.append(min_years_experience)
+
+        # Skills filtering logic (similar to jobs, requiring all specified skills)
+        if skills:
+            required_skill_names = [s.strip() for s in skills.split(',') if s.strip()]
+            if required_skill_names:
+                skill_filter_clause = f"""
+                    u.id IN (
+                        SELECT ars_sub.artisan_id
+                        FROM artisan_skills ars_sub
+                        JOIN skills s_sub ON ars_sub.skill_id = s_sub.id
+                        WHERE s_sub.name IN ({', '.join(['%s'] * len(required_skill_names))})
+                        GROUP BY ars_sub.artisan_id
+                        HAVING COUNT(DISTINCT s_sub.id) = %s
+                    )
+                """
+                where_clauses.append(skill_filter_clause)
+                query_params.extend(required_skill_names)
+                query_params.append(len(required_skill_names))
+
+        # Construct the WHERE clause
+        full_where_clause = " WHERE " + " AND ".join(where_clauses) if where_clauses else ""
+
+
+        # -------------------------------------------------------------
+        # Pagination Logic
+        # -------------------------------------------------------------
+        offset = (page - 1) * size
+
+        # 1. Get total count of artisans matching filters
+        # For count query, we only need to join users and artisan_skills for skill filtering
+        count_query_full = f"""
+            {count_query_base}
+            LEFT JOIN artisan_details ad ON u.id = ad.user_id
+            LEFT JOIN artisan_skills ars ON u.id = ars.artisan_id
+            LEFT JOIN skills s ON ars.skill_id = s.id
+            {full_where_clause}
+        """
+        cursor.execute(count_query_full, query_params)
+        total_count = cursor.fetchone()[0]
+
+        # 2. Get the artisans for the current page
+        final_query = f"""
+            {main_query_base}
+            {full_where_clause}
+            GROUP BY u.id, u.full_name, u.email, u.phone_number, u.location, u.user_type, u.created_at, ad.bio, ad.years_experience
+            ORDER BY u.created_at DESC
+            LIMIT %s OFFSET %s;
+        """
+        # Append pagination params to the existing filters
+        paged_query_params = query_params + [size, offset]
+
+        cursor.execute(final_query, paged_query_params)
         artisan_rows = cursor.fetchall()
 
         artisans_list = []
         for row in artisan_rows:
-            # Map SQL row to Pydantic models
-            # Ensure correct indexing based on your SELECT statement
-            user_id, full_name, email, phone_number, location, user_type, \
-            bio, years_experience, average_rating, total_reviews, is_available, \
-            skills_array = row
+            (user_id, full_name, email, phone_number, location, user_type_str, created_at,
+             bio, years_experience, skill_names_array) = row
 
-            # Create UserBase part
-            user_base = UserBase(
-                id=user_id,
-                full_name=full_name,
-                email=email,
-                phone_number=phone_number,
-                user_type=user_type,
-                location=location
-            )
+            # Handle ARRAY_AGG returning {NULL} for no skills or empty array
+            parsed_skills = [s for s in (skill_names_array if skill_names_array else []) if s is not None]
 
-            # Create ArtisanDetails part
-            artisan_details = None
-            if bio is not None: # Check if artisan_details exist (LEFT JOIN might return NULLs)
-                artisan_details = ArtisanDetails(
-                    bio=bio,
-                    years_experience=years_experience,
-                    average_rating=average_rating,
-                    total_reviews=total_reviews,
-                    is_available=is_available
+            artisans_list.append(
+                UserProfile(
+                    id=user_id,
+                    full_name=full_name,
+                    email=email,
+                    phone_number=phone_number,
+                    location=location,
+                    user_type=UserType(user_type_str),
+                    created_at=created_at,
+                    artisan_details=ArtisanDetails(
+                        bio=bio,
+                        years_experience=years_experience,
+                        # average_rating, total_reviews, is_available are not yet handled, will be None
+                    ),
+                    skills=parsed_skills
                 )
-
-            # Prepare skills list (handle case where skills_array might be None or contains None if no skills)
-            # ARRAY_AGG with no matching rows typically returns {NULL} or an empty array, handle it.
-            parsed_skills = [s for s in (skills_array if skills_array else []) if s is not None]
-
-
-            # Create UserProfile
-            user_profile = UserProfile(
-                **user_base.model_dump(), # Pydantic V2 method to convert to dict
-                artisan_details=artisan_details,
-                skills=parsed_skills
             )
-            artisans_list.append(user_profile)
 
-        return artisans_list
+        return ArtisansListResponse(
+            artisans=artisans_list,
+            total_count=total_count,
+            page=page,
+            size=size
+        )
 
+    except HTTPException:
+        raise # Re-raise HTTP exceptions
     except Exception as e:
         print(f"Error fetching artisans: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Server error fetching artisans")
