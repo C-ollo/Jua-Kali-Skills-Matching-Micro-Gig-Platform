@@ -11,82 +11,86 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
 
-  // This single useEffect will handle both initial load and token changes
-  useEffect(() => {
-    const loadUserData = async () => {
-      if (token) { // If a token exists (either from localStorage on mount or after login)
-        setLoading(true); // Indicate that we are loading user data
-        try {
-          const profile = await getMyProfile(); // Attempt to fetch user profile
-          setUser(profile); // Set user data if successful
-
-          // Immediately after successful profile load, navigate to dashboard
-          // unless we are already on the dashboard page.
-          if (profile && window.location.pathname !== '/dashboard') {
-            navigate('/dashboard');
-          }
-        } catch (error) {
-          console.error('Failed to fetch user profile or validate token:', error.response?.data || error.message);
-          // If fetching fails (e.g., invalid token, 401, 404), clear the token
-          localStorage.removeItem('token');
-          setToken(null); // This will clear the token, and thus 'user' will remain null
-          setUser(null); // Ensure user is explicitly null
-
-          // Only redirect to login if we are not already on the login page,
-          // to prevent infinite redirect loops on a bad token.
-          if (window.location.pathname !== '/login') {
-             navigate('/login');
-          }
-        } finally {
-          setLoading(false); // Always set loading to false after the attempt
-        }
-      } else { // No token exists or token was just cleared (e.g., on logout)
-        setUser(null); // Ensure user is null
-        setLoading(false); // Not loading anything
-      }
-    };
-
-    loadUserData(); // Call the async function inside useEffect
-  }, [token, navigate]); // **CRITICAL FIX**: Depend on 'token' and 'navigate'
-
-  // Login function
-  const login = async (credentials) => {
+  // Function to fetch and set user profile (THIS IS THE FUNCTION)
+  const fetchUserProfile = async (authToken) => {
+    if (!authToken) {
+      setUser(null);
+      setLoading(false);
+      console.log("AuthContext: fetchUserProfile completed (no token). User null, Loading false."); // ADDED LOG
+      return;
+    }
     try {
-      const data = await apiLoginUser(credentials);
-      localStorage.setItem('token', data.token); // Store the token from the backend response
-      setToken(data.token); // Update state, which will now trigger the useEffect above
-      return { success: true };
+      const profile = await getMyProfile();
+      setUser(profile);
+      console.log("AuthContext: fetchUserProfile SUCCESS. User set, profile:", profile); // ADDED LOG
     } catch (error) {
-      console.error('Login failed in AuthContext:', error);
-      throw error; // Re-throw the error so LoginPage can display it
+      console.error('Failed to fetch user profile:', error.response?.data || error.message);
+      // If token is invalid/expired, clear it and redirect to login
+      localStorage.removeItem('token');
+      setToken(null);
+      setUser(null);
+      // Explicitly navigate to login if the error indicates invalid token (e.g., 401, 404)
+      if (error.response?.status === 401 || error.response?.status === 404) {
+        navigate('/login');
+      }
+    } finally {
+      setLoading(false);
+      console.log("AuthContext: fetchUserProfile finally block. Loading set to false."); // ADDED LOG
     }
   };
 
-  // Register function (assuming it might also log in or set a token)
+  // Effect to run on initial load or when token changes to check for existing token
+  useEffect(() => {
+    console.log("AuthContext useEffect: token changed or initial load. Token:", token);
+    fetchUserProfile(token);
+  }, [token]); // This effect runs whenever the token state changes
+
+  // Function to handle user login
+  const login = async (credentials) => {
+    try {
+      setLoading(true); // Indicate loading when login starts
+      const response = await apiLoginUser(credentials);
+      localStorage.setItem('token', response.access_token);
+      setToken(response.access_token);
+      // No need to fetch profile here; the useEffect for token will trigger fetchUserProfile
+      navigate('/dashboard'); // Navigate to dashboard after successful login
+    } catch (error) {
+      console.error('Login failed in AuthContext:', error);
+      throw error; // Re-throw to be caught by the login page
+    } finally {
+        // setLoading(false); // Do not set loading false here; let fetchUserProfile handle it after token update
+    }
+  };
+
+  // Function to handle user registration
   const register = async (userData) => {
     try {
-      const result = await apiRegisterUser(userData);
-      // If registration also returns a token and logs in the user directly
-      if (result.token) {
-          localStorage.setItem('token', result.token);
-          setToken(result.token); // This will also trigger the useEffect
-      }
-      return { success: true, user: result.user };
+      setLoading(true); // Indicate loading when register starts
+      const response = await apiRegisterUser(userData);
+      // For registration, directly log in the user if successful
+      // Or simply navigate to login page
+      localStorage.setItem('token', response.access_token); // Assuming register returns a token
+      setToken(response.access_token);
+      navigate('/dashboard'); // Redirect to dashboard after successful registration and login
+      return response;
     } catch (error) {
       console.error('Registration failed in AuthContext:', error);
       throw error;
+    } finally {
+        // setLoading(false); // Do not set loading false here; let fetchUserProfile handle it after token update
     }
   };
 
   // Logout function
   const logout = () => {
-    localStorage.removeItem('token'); // Clear token from storage
-    setToken(null); // Clear token state, triggering useEffect to clear user and redirect
-    // The navigation to /login is now handled by the useEffect as well, which is cleaner.
+    localStorage.removeItem('token');
+    setToken(null);
+    setUser(null);
+    navigate('/login'); // Redirect to login page after logout
   };
 
-  // Conditional Rendering for Loading State
-  // Displays a loading message while user data is being fetched (e.g., on initial load).
+  // --- Start of conditional rendering for initial AuthProvider loading state ---
+  // This ensures the app doesn't render until authentication status is known
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-100">
@@ -94,25 +98,22 @@ export const AuthProvider = ({ children }) => {
       </div>
     );
   }
+  // --- End of conditional rendering for initial AuthProvider loading state ---
 
-  // Define authContextValue. It's placed after the 'if (loading)' block
-  // to ensure it's always defined when the component proceeds to render the Provider.
   const authContextValue = {
-    user, // The current logged-in user's data
-    token, // The JWT token
-    isAuthenticated: !!token && !!user, // Convenience boolean: true if token and user data exist
-    loading, // The current loading status of the authentication context
-    login, // Function to log in a user
-    register, // Function to register a new user
-    logout, // Function to log out a user
-
-    // Helper booleans to check user type for conditional rendering/access control
+    user,
+    token,
+    isAuthenticated: !!token && !!user, // True if token and user data exist
+    loading, // Make sure loading is always available
+    login,
+    register,
+    logout,
+    // Helper to check user type
     isClient: user && user.user_type === 'client',
     isArtisan: user && user.user_type === 'artisan',
     isAdmin: user && user.user_type === 'admin',
   };
 
-  // Render the AuthContext Provider, making the authContextValue available to all children.
   return (
     <AuthContext.Provider value={authContextValue}>
       {children}
@@ -120,11 +121,9 @@ export const AuthProvider = ({ children }) => {
   );
 };
 
-// Custom hook 'useAuth' to easily consume the AuthContext in any component.
+// Custom hook to use the AuthContext
 export const useAuth = () => {
   const context = useContext(AuthContext);
-  // Throw an error if useAuth is called outside of an AuthProvider,
-  // indicating a setup issue.
   if (!context) {
     throw new Error('useAuth must be used within an AuthProvider');
   }

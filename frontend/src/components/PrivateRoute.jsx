@@ -1,32 +1,35 @@
 // frontend/src/components/PrivateRoute.jsx
 import React from 'react';
 import { Navigate } from 'react-router-dom';
-import { useAuth } from '../contexts/AuthContext'; // Import useAuth
+import { useAuth } from '../contexts/AuthContext';
 
 const PrivateRoute = ({ children, allowedRoles }) => {
-  const { isAuthenticated, user, loading } = useAuth();
+  const { isAuthenticated, loading, user } = useAuth();
+
+  console.log("PrivateRoute: Rendering for path.", { isAuthenticated, loading, user, allowedRoles }); // NEW LOG
 
   if (loading) {
+    console.log("PrivateRoute: Loading authentication status."); // NEW LOG
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-100">
         <p className="text-xl text-gray-700">Checking authentication...</p>
       </div>
-    ); // Or a loading spinner
+    );
   }
 
   if (!isAuthenticated) {
-    // Not authenticated, redirect to login page
+    console.log("PrivateRoute: Not authenticated. Redirecting to /login."); // NEW LOG
     return <Navigate to="/login" replace />;
   }
 
-  // If allowedRoles are specified, check user's role
+  // Check roles only if allowedRoles is provided
   if (allowedRoles && user && !allowedRoles.includes(user.user_type)) {
-    console.warn(`Access denied for user type '${user.user_type}'. Required roles: ${allowedRoles.join(', ')}`);
-    // If authenticated but not authorized for this role, redirect to a dashboard or unauthorized page
-    return <Navigate to="/dashboard" replace />; // Or a specific /unauthorized page
+    console.log(`PrivateRoute: User role '${user.user_type}' not in allowed roles [${allowedRoles.join(', ')}]. Redirecting to /dashboard.`); // NEW LOG
+    return <Navigate to="/dashboard" replace />;
   }
 
-  return children; // If authenticated and authorized, render the child components
+  console.log("PrivateRoute: Authenticated and authorized. Rendering children."); // NEW LOG
+  return children;
 };
 
 export default PrivateRoute;

@@ -1,6 +1,6 @@
 # backend/schemas.py
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, HttpUrl
 from typing import List, Optional
 from enum import Enum
 from datetime import datetime
@@ -55,8 +55,6 @@ class ArtisanDetails(BaseModel):
     class Config:
         from_attributes = True
 
-    class Config:
-        from_attributes = True
 
 class UserProfile(UserBase):
     # Inherits fields from UserBase
@@ -187,6 +185,10 @@ class ArtisanDetailsUpdate(BaseModel):
     years_experience: Optional[int] = None
     skills: Optional[List[str]] = None # List of skill names to update 
 
+class ProfileUpdate(UserUpdate): # Inherit basic user update fields
+    artisan_details: Optional[ArtisanDetailsUpdate] = None
+
+    
 class JobsListResponse(BaseModel):
     jobs: List[JobResponse]
     total_count: int

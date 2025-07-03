@@ -32,3 +32,13 @@ export const getMyProfile = async () => {
         throw error.response?.data || error.message;
     }
 };
+
+export const updateMyProfile = async (profileData) => {
+  try {
+      // Send a PUT request to /api/auth/me with the profileData
+      const response = await api.put('/auth/me', profileData);
+      return response.data; // Returns the updated user profile
+  } catch (error) {
+      throw error.response?.data || error.message;
+  }
+};

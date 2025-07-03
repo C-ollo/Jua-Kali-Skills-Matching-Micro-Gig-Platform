@@ -1,6 +1,6 @@
 // frontend/src/App.jsx
 import React from 'react';
-import { Routes, Route } from 'react-router-dom';
+import { Routes, Route, Navigate } from 'react-router-dom'; // Import BrowserRouter and Navigate
 import './index.css';
 
 // Import your page components
@@ -9,62 +9,50 @@ import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
 import DashboardPage from './pages/DashboardPage';
 import NotFoundPage from './pages/NotFoundPage';
+import ProfilePage from './pages/ProfilePage';
 
-// Import PrivateRoute
+// Import AuthProvider and useAuth from your context
+import { AuthProvider, useAuth } from './contexts/AuthContext';
+
+// Import PrivateRoute - Ensure this file exists at src/components/PrivateRoute.jsx
 import PrivateRoute from './components/PrivateRoute';
 
 function App() {
   return (
-    <Routes>
-      {/* Public Routes */}
-      <Route path="/" element={<HomePage />} />
-      <Route path="/login" element={<LoginPage />} />
-      <Route path="/register" element={<RegisterPage />} />
+      <AuthProvider> {/* Wrap your routes with AuthProvider to provide auth context */}
+        <Routes>
+          {/* Public Routes */}
+          {/* Note: I'm making '/' redirect to login, as it's common for authenticated apps. 
+                     If you want a public homepage, keep <Route path="/" element={<HomePage />} />
+                     and remove the Navigate below. */}
+          <Route path="/" element={<Navigate replace to="/login" />} /> {/* Redirect root to login */}
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/register" element={<RegisterPage />} />
+          <Route path="/home" element={<HomePage />} /> {/* Keep HomePage if you want a public one */}
 
-      {/* Authenticated Routes */}
-      {/* Example: Dashboard accessible by any authenticated user */}
-      <Route
-        path="/dashboard"
-        element={
-          <PrivateRoute>
-            <DashboardPage />
-          </PrivateRoute>
-        }
-      />
+          {/* Authenticated Routes */}
+          <Route
+            path="/dashboard"
+            element={
+              <PrivateRoute>
+                <DashboardPage />
+              </PrivateRoute>
+            }
+          />
+          <Route
+            path="/profile"
+            element={
+              <PrivateRoute>
+                <ProfilePage />
+              </PrivateRoute>
+            }
+          />
 
-      {/* Example: Client-specific dashboard, only accessible by clients */}
-      {/* <Route
-        path="/client/dashboard"
-        element={
-          <PrivateRoute allowedRoles={['client']}>
-            <ClientDashboardPage /> // You'd create this page
-          </PrivateRoute>
-        }
-      /> */}
-
-      {/* Example: Artisan-specific dashboard, only accessible by artisans */}
-      {/* <Route
-        path="/artisan/dashboard"
-        element={
-          <PrivateRoute allowedRoles={['artisan']}>
-            <ArtisanDashboardPage /> // You'd create this page
-          </PrivateRoute>
-        }
-      /> */}
-
-      {/* Example: Admin dashboard, only accessible by admins */}
-      {/* <Route
-        path="/admin/dashboard"
-        element={
-          <PrivateRoute allowedRoles={['admin']}>
-            <AdminDashboardPage /> // You'd create this page
-          </PrivateRoute>
-        }
-      /> */}
-
-      {/* Catch-all for 404 */}
-      <Route path="*" element={<NotFoundPage />} />
-    </Routes>
+          {/* Catch-all for 404 - make sure NotFoundPage component exists */}
+          {/* If you don't have NotFoundPage, change to <Route path="*" element={<Navigate replace to="/login" />} /> */}
+          <Route path="*" element={<NotFoundPage />} />
+        </Routes>
+      </AuthProvider>
   );
 }
 

@@ -1,5 +1,5 @@
 # backend/routers/auth.py
-from typing import Optional
+from typing import Optional, List
 from fastapi import APIRouter, HTTPException, Depends, status
 from ..schemas import *# Import your Pydantic models
 from ..database import get_db_connection, put_db_connection # Import DB utilities
@@ -8,6 +8,7 @@ from fastapi.security import OAuth2PasswordBearer
 from passlib.context import CryptContext # For password hashing
 from jose import JWTError, jwt # For JWT handling
 from datetime import datetime, timedelta, timezone # For token expiration
+from psycopg2.extras import RealDictCursor
 
 # OAuth2 scheme for JWT token extraction
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/login")
@@ -371,71 +372,151 @@ async def read_users_me(current_user: UserBase = Depends(get_current_user)):
         if conn:
             put_db_connection(conn)
 
-@router.put("/me", response_model=UserBase) # Return updated basic user info
+@router.put("/me", response_model=UserProfile)
 async def update_my_profile(
-    user_update: UserUpdate,
+    profile_update: ProfileUpdate, # Now accepts the combined ProfileUpdate schema
     current_user: UserBase = Depends(get_current_user)
 ):
     conn = None
     try:
         conn = get_db_connection()
-        cursor = conn.cursor()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
 
-        update_fields = []
-        update_values = []
-
-        # Check and prepare updates for each optional field
-        if user_update.full_name is not None:
-            update_fields.append("full_name = %s")
-            update_values.append(user_update.full_name)
-        if user_update.email is not None:
-            # Check for existing email if user is trying to change it
-            if user_update.email != current_user.email:
-                cursor.execute("SELECT id FROM users WHERE email = %s AND id != %s", (user_update.email, current_user.id))
+        # 1. Update basic user fields in the 'users' table
+        update_fields = {}
+        if profile_update.full_name is not None:
+            update_fields['full_name'] = profile_update.full_name
+        if profile_update.email is not None:
+            # Check if new email already exists and is not the current user's email
+            if profile_update.email != current_user.email:
+                cursor.execute("SELECT id FROM users WHERE email = %s", (profile_update.email,))
                 if cursor.fetchone():
-                    raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered by another user.")
-            update_fields.append("email = %s")
-            update_values.append(user_update.email)
-        if user_update.phone_number is not None:
-            update_fields.append("phone_number = %s")
-            update_values.append(user_update.phone_number)
-        if user_update.location is not None:
-            update_fields.append("location = %s")
-            update_values.append(user_update.location)
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already taken.")
+            update_fields['email'] = profile_update.email
+        if profile_update.phone_number is not None:
+            update_fields['phone_number'] = profile_update.phone_number
+        if profile_update.location is not None:
+            update_fields['location'] = profile_update.location
 
-        if not update_fields:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No fields provided for update.")
+        if update_fields:
+            set_clauses = [f"{k} = %s" for k in update_fields.keys()]
+            query = f"""
+                UPDATE users
+                SET {', '.join(set_clauses)}, updated_at = CURRENT_TIMESTAMP
+                WHERE id = %s
+                RETURNING id, full_name, email, phone_number, user_type, location, created_at, updated_at;
+            """
+            values = list(update_fields.values()) + [current_user.id]
+            cursor.execute(query, values)
+            updated_user_data = cursor.fetchone()
+            if not updated_user_data:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found for update.")
+        else:
+            updated_user_data = current_user.model_dump() # Use current_user data if no user fields updated
 
-        update_values.append(current_user.id) # Add current user's ID for WHERE clause
 
-        query = f"UPDATE users SET {', '.join(update_fields)}, updated_at = CURRENT_TIMESTAMP WHERE id = %s RETURNING id, full_name, email, phone_number, location, user_type, created_at;"
-        cursor.execute(query, update_values)
-        updated_user_row = cursor.fetchone()
+        # 2. Handle Artisan-specific updates if the current user is an artisan
+        if current_user.user_type == UserType.artisan and profile_update.artisan_details:
+            artisan_details_update = profile_update.artisan_details
 
-        if updated_user_row is None: # Should not happen if current_user.id is valid
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to retrieve updated user data.")
+            # Update artisan_details table
+            artisan_detail_fields = {}
+            if artisan_details_update.bio is not None:
+                artisan_detail_fields['bio'] = artisan_details_update.bio
+            if artisan_details_update.years_experience is not None:
+                artisan_detail_fields['years_experience'] = artisan_details_update.years_experience
+            if artisan_details_update.is_available is not None:
+                artisan_detail_fields['is_available'] = artisan_details_update.is_available
+
+            if artisan_detail_fields:
+                artisan_set_clauses = [f"{k} = %s" for k in artisan_detail_fields.keys()]
+                artisan_query = f"""
+                    UPDATE artisan_details
+                    SET {', '.join(artisan_set_clauses)}, updated_at = CURRENT_TIMESTAMP
+                    WHERE user_id = %s
+                    RETURNING bio, years_experience, average_rating, total_reviews, is_available;
+                """
+                artisan_values = list(artisan_detail_fields.values()) + [current_user.id]
+                cursor.execute(artisan_query, artisan_values)
+                updated_artisan_details = cursor.fetchone()
+                if updated_artisan_details:
+                    updated_user_data['artisan_details'] = updated_artisan_details
+                else:
+                    # If no artisan_details row existed, create it (should ideally exist on artisan registration)
+                    cursor.execute(
+                        """
+                        INSERT INTO artisan_details (user_id, bio, years_experience, is_available)
+                        VALUES (%s, %s, %s, %s)
+                        RETURNING bio, years_experience, average_rating, total_reviews, is_available;
+                        """,
+                        (current_user.id, artisan_details_update.bio, artisan_details_update.years_experience, artisan_details_update.is_available)
+                    )
+                    updated_user_data['artisan_details'] = cursor.fetchone()
+            else:
+                # If no artisan_detail_fields to update, fetch current artisan details for response
+                cursor.execute(
+                    """
+                    SELECT bio, years_experience, average_rating, total_reviews, is_available
+                    FROM artisan_details WHERE user_id = %s;
+                    """,
+                    (current_user.id,)
+                )
+                updated_user_data['artisan_details'] = cursor.fetchone() or ArtisanDetails() # Ensure it's not None
+
+
+            # Handle skills update (replace all skills with the provided list)
+            if artisan_details_update.skills is not None:
+                # First, remove existing skills for this artisan
+                cursor.execute("DELETE FROM artisan_skills WHERE artisan_id = %s", (current_user.id,))
+
+                if artisan_details_update.skills:
+                    # Then, add the new skills
+                    skill_ids_to_add = []
+                    for skill_name in artisan_details_update.skills:
+                        # Find skill ID or create new skill
+                        cursor.execute("SELECT id FROM skills WHERE name = %s", (skill_name,))
+                        skill_row = cursor.fetchone()
+                        if skill_row:
+                            skill_ids_to_add.append(skill_row['id'])
+                        else:
+                            cursor.execute("INSERT INTO skills (name) VALUES (%s) RETURNING id", (skill_name,))
+                            skill_ids_to_add.append(cursor.fetchone()['id'])
+
+                    if skill_ids_to_add:
+                        from psycopg2.extras import execute_values # Make sure this is imported if not already at the top
+                        execute_values(
+                            cursor,
+                            "INSERT INTO artisan_skills (artisan_id, skill_id) VALUES %s ON CONFLICT DO NOTHING",
+                            [(current_user.id, skill_id) for skill_id in skill_ids_to_add]
+                        )
+                updated_user_data['skills'] = artisan_details_update.skills # Update skills in response
+            else:
+                # If skills not provided in update, re-fetch current skills for response
+                cursor.execute(
+                    """
+                    SELECT s.name FROM skills s
+                    JOIN artisan_skills as_ ON s.id = as_.skill_id
+                    WHERE as_.artisan_id = %s;
+                    """,
+                    (current_user.id,)
+                )
+                updated_user_data['skills'] = [row['name'] for row in cursor.fetchall()]
+
 
         conn.commit()
 
-        # Return the updated UserBase object
-        (user_id, full_name, email, phone_number, location, user_type_str, created_at) = updated_user_row
-        return UserBase(
-            id=user_id,
-            full_name=full_name,
-            email=email,
-            phone_number=phone_number,
-            location=location,
-            user_type=UserType(user_type_str),
-            created_at=created_at
-        )
+        # Re-fetch the full profile to ensure all derived data (like average_rating) is fresh
+        # This also ensures 'created_at', 'updated_at' and other fields are correctly populated.
+        # Call the existing read_users_me to get the complete, updated profile
+        return await read_users_me(current_user)
 
     except HTTPException:
-        conn.rollback()
+        if conn: conn.rollback()
         raise
     except Exception as e:
-        conn.rollback()
-        print(f"Error updating user profile {current_user.id}: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update profile due to server error.")
+        if conn: conn.rollback()
+        print(f"Error updating user profile: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Server error updating profile: {e}")
     finally:
         if conn:
             put_db_connection(conn)            

@@ -1,99 +1,102 @@
 // frontend/src/pages/DashboardPage.jsx
 import React from 'react';
-import { useAuth } from '../contexts/AuthContext'; // Import useAuth
-import { Link } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
+import { useNavigate } from 'react-router-dom';
 
 function DashboardPage() {
-  const { user, logout, isClient, isArtisan, isAdmin } = useAuth(); // Get user and logout from context
+  const { user, logout, loading, isAuthenticated } = useAuth(); // Get user, logout, and loading state from AuthContext
+  const navigate = useNavigate();
 
-  if (!user) {
-    // This case should ideally be handled by PrivateRoute,
-    // but a fallback for extra safety is good.
+  // Show loading state if authentication context is still loading
+  if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-100">
-        <p className="text-xl text-gray-700">No user data found. Redirecting...</p>
+        <p className="text-xl text-gray-700">Loading dashboard...</p>
       </div>
     );
   }
 
-  return (
-    <div className="min-h-screen bg-indigo-50 flex flex-col items-center justify-center p-4">
-      <div className="bg-white p-8 rounded-lg shadow-xl w-full max-w-lg">
-        <h1 className="text-3xl font-bold text-center text-indigo-800 mb-6">
-          Welcome to Your Dashboard!
-        </h1>
-        <div className="text-lg text-gray-700 space-y-2 mb-6">
-          <p>
-            **Logged in as:**{' '}
-            <span className="font-semibold text-indigo-600">{user.full_name}</span>
-          </p>
-          <p>
-            **Email:** <span className="font-semibold">{user.email}</span>
-          </p>
-          <p>
-            **User Type:**{' '}
-            <span className="font-semibold capitalize text-purple-600">
-              {user.user_type}
-            </span>
-          </p>
-          {user.location && (
-            <p>
-              **Location:** <span className="font-semibold">{user.location}</span>
-            </p>
-          )}
+  // If for some reason user is null but not loading (e.g., direct access without token)
+  if (!user) {
+    navigate('/login'); // Redirect to login if not authenticated
+    return null; // Don't render anything
+  }
+  
 
-          {/* Display Artisan-specific details if available */}
-          {isArtisan && user.artisan_details && (
-            <div className="mt-4 p-4 bg-yellow-50 rounded-lg border border-yellow-200">
-              <h2 className="text-xl font-semibold text-yellow-800 mb-2">Artisan Details:</h2>
-              <p>
-                **Bio:** <span className="font-medium">{user.artisan_details.bio || 'N/A'}</span>
-              </p>
-              <p>
-                **Experience:**{' '}
-                <span className="font-medium">{user.artisan_details.years_experience} years</span>
-              </p>
-              <p>
-                **Rating:**{' '}
-                <span className="font-medium">
-                  {user.artisan_details.average_rating ? user.artisan_details.average_rating.toFixed(1) : 'N/A'} (
-                  {user.artisan_details.total_reviews} reviews)
-                </span>
-              </p>
-              <p>
-                **Available:**{' '}
-                <span className="font-medium">
-                  {user.artisan_details.is_available ? 'Yes' : 'No'}
-                </span>
-              </p>
-              {user.skills && user.skills.length > 0 && (
-                <p>
-                  **Skills:**{' '}
-                  <span className="font-medium">{user.skills.join(', ')}</span>
-                </p>
-              )}
-            </div>
-          )}
+  return (
+    <div className="min-h-screen bg-gray-100 p-8">
+      <div className="max-w-4xl mx-auto bg-white p-6 rounded-lg shadow-md">
+        <h1 className="text-3xl font-bold text-gray-800 mb-6">Welcome to Your Dashboard, {user.full_name}!</h1>
+
+        <div className="mb-8">
+          <p className="text-lg text-gray-700">This is your central hub for managing your Juakali activities.</p>
+          <p className="text-md text-gray-600 mt-2">
+            You are logged in as a <span className="font-semibold text-blue-600 capitalize">{user.user_type}</span>.
+          </p>
         </div>
 
-        <div className="flex justify-center gap-4 mt-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* Link to Profile Page */}
+          <div className="bg-blue-50 p-4 rounded-lg shadow-sm hover:shadow-md transition-shadow">
+            <h2 className="text-xl font-semibold text-blue-800 mb-2">My Profile</h2>
+            <p className="text-gray-700 mb-3">View and update your personal details and {user.user_type === 'artisan' ? 'artisan information and skills.' : 'contact information.'}</p>
+            <button
+              onClick={() => navigate('/profile')}
+              className="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-md transition duration-300"
+            >
+              Go to Profile
+            </button>
+          </div>
+
+          {/* Conditional Sections based on user type */}
+          {user.user_type === 'client' && (
+            <div className="bg-green-50 p-4 rounded-lg shadow-sm hover:shadow-md transition-shadow">
+              <h2 className="text-xl font-semibold text-green-800 mb-2">Post a New Job</h2>
+              <p className="text-gray-700 mb-3">Describe your service needs and connect with skilled artisans.</p>
+              <button
+                onClick={() => alert('Navigate to Post Job page (Coming Soon!)')}
+                className="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded-md transition duration-300"
+              >
+                Post Job
+              </button>
+            </div>
+          )}
+
+          {user.user_type === 'artisan' && (
+            <div className="bg-purple-50 p-4 rounded-lg shadow-sm hover:shadow-md transition-shadow">
+              <h2 className="text-xl font-semibold text-purple-800 mb-2">Manage My Services</h2>
+              <p className="text-gray-700 mb-3">Create, update, or view your offered services and availability.</p>
+              <button
+                onClick={() => alert('Navigate to Manage Services page (Coming Soon!)')}
+                className="bg-purple-500 hover:bg-purple-600 text-white font-bold py-2 px-4 rounded-md transition duration-300"
+              >
+                Manage Services
+              </button>
+            </div>
+          )}
+
+          <div className="bg-yellow-50 p-4 rounded-lg shadow-sm hover:shadow-md transition-shadow">
+            <h2 className="text-xl font-semibold text-yellow-800 mb-2">View Listings</h2>
+            <p className="text-gray-700 mb-3">Browse available jobs or artisans in your area.</p>
+            <button
+              onClick={() => alert('Navigate to View Listings page (Coming Soon!)')}
+              className="bg-yellow-500 hover:bg-yellow-600 text-white font-bold py-2 px-4 rounded-md transition duration-300"
+            >
+              View Listings
+            </button>
+          </div>
+
+          {/* Add more sections as needed */}
+
+        </div>
+
+        <div className="mt-8 text-center">
           <button
             onClick={logout}
-            className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-md focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
+            className="bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-6 rounded-md transition duration-300"
           >
             Logout
           </button>
-          {/* Add more links/buttons based on user type */}
-          {isClient && (
-            <Link to="/client/jobs/post" className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md inline-flex items-center justify-center">
-              Post a Job
-            </Link>
-          )}
-          {isArtisan && (
-            <Link to="/artisan/jobs" className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-md inline-flex items-center justify-center">
-              Browse Jobs
-            </Link>
-          )}
         </div>
       </div>
     </div>
