@@ -3,6 +3,7 @@
 from fastapi import APIRouter, HTTPException, Depends, status, Query
 from backend.database import get_db_connection, put_db_connection
 from backend.schemas import *
+from backend.routers.notification import create_notification
 from backend.routers.auth import get_current_user # To get the authenticated user
 from psycopg2.extras import execute_values
 from typing import List
@@ -609,7 +610,7 @@ async def update_application_status(
             """
             SELECT
                 ja.id, ja.job_id, ja.artisan_id, ja.bid_amount, ja.message, ja.status, ja.created_at,
-                j.client_id AS job_client_id, j.status AS job_current_status,
+                j.client_id AS job_client_id, j.status AS job_current_status, j.title AS job_title, -- Added job_title
                 u.full_name, u.email, u.phone_number, u.location,
                 ad.bio, ad.years_experience
             FROM job_applications ja
@@ -626,7 +627,7 @@ async def update_application_status(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Application not found.")
 
         (app_id, job_id, artisan_id, bid_amount, message, current_app_status_str, app_created_at,
-         job_client_id, job_current_status_str,
+         job_client_id, job_current_status_str, job_title, # Extracted job_title
          artisan_full_name, artisan_email, artisan_phone, artisan_location,
          artisan_bio, artisan_years_experience) = application_row
 
@@ -679,11 +680,35 @@ async def update_application_status(
                 "UPDATE job_applications SET status = %s, updated_at = CURRENT_TIMESTAMP WHERE job_id = %s AND id != %s AND status = %s",
                 (JobApplicationStatus.rejected.value, job_id, app_id, JobApplicationStatus.pending.value)
             )
+
+            # --- NEW NOTIFICATION CODE FOR ACCEPTED APPLICATION ---
+            await create_notification(
+                user_id=artisan_id,
+                message=f"Your application for job '{job_title}' has been accepted!",
+                notification_type=NotificationType.application_accepted,
+                entity_id=job_id,
+                conn=conn # Pass the existing connection for transaction
+            )
+            # --- END NEW NOTIFICATION CODE ---
+
         else: # If new status is rejected, withdrawn, etc.
             cursor.execute(
                 "UPDATE job_applications SET status = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s",
                 (new_app_status.value, app_id)
             )
+            # --- NEW NOTIFICATION CODE FOR REJECTED/WITHDRAWN APPLICATION ---
+            # Notify the artisan only if it's explicitly rejected by client or withdrawn by artisan
+            if new_app_status == JobApplicationStatus.rejected:
+                await create_notification(
+                    user_id=artisan_id,
+                    message=f"Your application for job '{job_title}' has been rejected.",
+                    notification_type=NotificationType.application_rejected,
+                    entity_id=job_id,
+                    conn=conn # Pass the existing connection for transaction
+                )
+            # You could add another notification_type for 'withdrawn' if the artisan themselves calls this endpoint to withdraw
+            # For now, assuming rejected is the primary one from client.
+            # --- END NEW NOTIFICATION CODE ---
 
         conn.commit()
 
@@ -1031,3 +1056,97 @@ async def get_my_assigned_jobs(
     finally:
         if conn:
             put_db_connection(conn)
+
+@router.put("/{job_id}/complete", response_model=JobResponse)
+async def complete_job(
+    job_id: int,
+    current_user: UserBase = Depends(get_current_user)
+):
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # 1. Fetch job details (including required_skills and title for notification)
+        # Assuming required_skills is stored as a list of strings (e.g., TEXT[]) in your DB
+        cursor.execute(
+            "SELECT client_id, status, assigned_artisan_id, title, required_skills FROM jobs WHERE id = %s",
+            (job_id,)
+        )
+        job_details = cursor.fetchone()
+
+        if not job_details:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found.")
+
+        client_id, current_status_str, assigned_artisan_id, job_title, required_skills_db = job_details
+
+        # 2. Authorization: Only the job's client can mark it complete
+        if current_user.user_type != UserType.client or current_user.id != client_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to mark this job as complete."
+            )
+
+        # 3. Validation: Job must be in 'assigned' status
+        if JobStatus(current_status_str) != JobStatus.assigned:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Job must be 'assigned' to be marked as complete. Current status: '{current_status_str}'."
+            )
+
+        # 4. Validation: Job must have an assigned artisan
+        if assigned_artisan_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Job must have an assigned artisan before it can be marked complete."
+            )
+
+        # 5. Update job status to 'completed'
+        cursor.execute(
+            "UPDATE jobs SET status = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s RETURNING *;",
+            (JobStatus.completed.value, job_id)
+        )
+        updated_job_row = cursor.fetchone()
+        conn.commit()
+
+        if not updated_job_row:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update job status.")
+
+        # 6. Create notification for the assigned artisan
+        await create_notification(
+            user_id=assigned_artisan_id,
+            message=f"Your job '{job_title}' has been marked as complete by the client.",
+            notification_type=NotificationType.job_status_update,
+            entity_id=job_id,
+            conn=conn # Pass the connection for transactional consistency
+        )
+
+        # 7. Return the updated job details
+        # Ensure correct indexing based on your RETURNING * order
+        # Assuming RETURNING * gives columns in the order they are defined in the table:
+        # id, title, description, client_id, status, location, budget, created_at, updated_at, required_skills, assigned_artisan_id
+        return JobResponse(
+            id=updated_job_row[0],
+            title=updated_job_row[1],
+            description=updated_job_row[2],
+            client_id=updated_job_row[3],
+            status=JobStatus(updated_job_row[4]),
+            location=updated_job_row[5],
+            budget=updated_job_row[6],
+            created_at=updated_job_row[7],
+            updated_at=updated_job_row[8], # Corrected typo here
+            required_skills=updated_job_row[9] if updated_job_row[9] else [], # Directly use the list of strings
+            assigned_artisan_id=updated_job_row[10]
+        )
+
+    except HTTPException:
+        if conn: conn.rollback()
+        raise
+    except Exception as e:
+        if conn: conn.rollback()
+        print(f"Error completing job {job_id}: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Server error completing job.")
+    finally:
+        if conn:
+            put_db_connection(conn)
+          

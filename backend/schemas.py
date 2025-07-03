@@ -219,4 +219,27 @@ class ReviewResponse(BaseModel):
     updated_at: datetime # Ensure this is present
 
     class Config:
-        from_attributes = True     
+        from_attributes = True  
+
+class NotificationType(str, Enum):
+    job_status_update = "job_status_update"
+    new_application = "new_application"
+    application_accepted = "application_accepted"
+    application_rejected = "application_rejected"
+    new_review = "new_review"
+    # Add more as needed, e.g., new_job_match, message, etc.
+
+class NotificationResponse(BaseModel):
+    id: int
+    user_id: int
+    message: str
+    notification_type: NotificationType
+    entity_id: Optional[int] = None
+    is_read: bool
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class NotificationUpdate(BaseModel):
+    is_read: bool           

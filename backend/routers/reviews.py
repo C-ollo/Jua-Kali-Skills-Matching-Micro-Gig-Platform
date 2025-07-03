@@ -1,17 +1,13 @@
 # backend/routers/review.py
 
 from typing import List, Optional
-
+from backend.routers.notification import create_notification
 from fastapi import APIRouter, Depends, HTTPException, status
 from psycopg2.extras import RealDictCursor, execute_values
 
 from backend.database import get_db_connection, put_db_connection
 from backend.routers.auth import get_current_user
-from backend.schemas import (
-    UserBase, UserType, JobStatus,
-    ReviewCreate, ReviewResponse,
-    UserProfile, ArtisanDetails # Needed for artisan profile update
-)
+from backend.schemas import *
 
 router = APIRouter(
     prefix="/reviews",
@@ -36,16 +32,17 @@ async def create_review(
             )
 
         # 2. Get job details and check validity
+        # Added job_title to the select statement for the notification message
         cursor.execute(
-            "SELECT client_id, assigned_artisan_id, status FROM jobs WHERE id = %s",
+            "SELECT client_id, assigned_artisan_id, status, title FROM jobs WHERE id = %s",
             (review_data.job_id,)
         )
-        job_info = cursor.fetchone()
+        job_info_row = cursor.fetchone()
 
-        if not job_info:
+        if not job_info_row:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found.")
 
-        job_client_id, assigned_artisan_id, job_status_str = job_info
+        job_client_id, assigned_artisan_id, job_status_str, job_title = job_info_row
 
         # Check if the current client is the one who posted the job
         if job_client_id != current_user.id:
@@ -112,9 +109,20 @@ async def create_review(
             (assigned_artisan_id, round(new_average_rating, 2), new_total_reviews)
         )
 
-        conn.commit()
+        conn.commit() # Commit the review and artisan details update
 
-        # Map the new review row to ReviewResponse
+        # --- NEW NOTIFICATION CODE FOR NEW REVIEW ---
+        # Notify the artisan that they received a new review
+        await create_notification(
+            user_id=assigned_artisan_id,
+            message=f"You received a new {review_data.rating}-star review for job '{job_title}'.",
+            notification_type=NotificationType.new_review,
+            entity_id=review_data.job_id, # Link to job
+            conn=conn # Pass the existing connection for transactional consistency
+        )
+        # --- END NEW NOTIFICATION CODE ---
+
+        # 5. Map the new review row to ReviewResponse
         (id, job_id, client_id, artisan_id, rating, comment, created_at, updated_at) = new_review_row
         return ReviewResponse(
             id=id, job_id=job_id, client_id=client_id, artisan_id=artisan_id,
@@ -122,10 +130,10 @@ async def create_review(
         )
 
     except HTTPException:
-        conn.rollback()
+        if conn: conn.rollback()
         raise
     except Exception as e:
-        conn.rollback()
+        if conn: conn.rollback()
         print(f"Error creating review: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Server error creating review.")
     finally:
