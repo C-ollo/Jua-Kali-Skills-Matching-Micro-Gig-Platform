@@ -9,6 +9,8 @@ from datetime import datetime
 class UserType(str, Enum):
     client = "client"
     artisan = "artisan"
+    admin = "admin"
+
 class RegisterUser(BaseModel):
     full_name: str = Field(..., min_length=1)
     email: EmailStr # Pydantic's EmailStr provides basic email validation
@@ -242,4 +244,14 @@ class NotificationResponse(BaseModel):
         from_attributes = True
 
 class NotificationUpdate(BaseModel):
-    is_read: bool           
+    is_read: bool
+
+class SkillCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100) # Name of the skill
+
+class SkillResponse(BaseModel):
+    id: int
+    name: str
+
+    class Config:
+        from_attributes = True # This ensures Pydantic can map database rows to this model

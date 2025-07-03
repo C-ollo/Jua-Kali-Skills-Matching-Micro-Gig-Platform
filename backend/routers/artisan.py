@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, status, Depends, Query
 from backend.database import get_db_connection, put_db_connection
 from backend.routers.auth import get_current_user 
 from backend.schemas import *# Import relevant schemas
-from psycopg2.extras import execute_values 
+from psycopg2.extras import execute_values, RealDictCursor 
 from typing import List, Optional # Import Optional for fields that might be None
 
 router = APIRouter(
@@ -416,4 +416,54 @@ async def get_reviews_for_artisan(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Server error fetching reviews.")
     finally:
         if conn:
-            put_db_connection(conn)            
+            put_db_connection(conn) 
+
+@router.put("/me/availability", response_model=ArtisanDetails)
+async def update_my_availability(
+    is_available: bool, # Directly receive the boolean status
+    current_user: UserBase = Depends(get_current_user)
+):
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+        # 1. Authorization: Ensure the current user is an artisan
+        if current_user.user_type != UserType.artisan:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only artisans can update their availability."
+            )
+
+        # 2. Update the is_available status in artisan_details
+        cursor.execute(
+            """
+            UPDATE artisan_details
+            SET is_available = %s, updated_at = CURRENT_TIMESTAMP
+            WHERE user_id = %s
+            RETURNING user_id, bio, years_experience, average_rating, total_reviews, is_available;
+            """,
+            (is_available, current_user.id)
+        )
+        updated_details = cursor.fetchone()
+
+        if not updated_details:
+            # This should ideally not happen if an artisan profile exists,
+            # but it's a safeguard if somehow artisan_details entry is missing.
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artisan details not found for current user.")
+
+        conn.commit()
+
+        # 3. Return the updated ArtisanDetails
+        return ArtisanDetails(**updated_details)
+
+    except HTTPException:
+        if conn: conn.rollback()
+        raise
+    except Exception as e:
+        if conn: conn.rollback()
+        print(f"Error updating availability for artisan {current_user.id}: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Server error updating availability.")
+    finally:
+        if conn:
+            put_db_connection(conn)
