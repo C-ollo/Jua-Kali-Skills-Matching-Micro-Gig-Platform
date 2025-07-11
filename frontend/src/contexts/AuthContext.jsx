@@ -50,8 +50,8 @@ export const AuthProvider = ({ children }) => {
     try {
       setLoading(true); // Indicate loading when login starts
       const response = await apiLoginUser(credentials);
-      localStorage.setItem('token', response.access_token);
-      setToken(response.access_token);
+      localStorage.setItem('token', response.token);
+      setToken(response.token);
       // No need to fetch profile here; the useEffect for token will trigger fetchUserProfile
       navigate('/dashboard'); // Navigate to dashboard after successful login
     } catch (error) {
@@ -107,6 +107,7 @@ export const AuthProvider = ({ children }) => {
     loading, // Make sure loading is always available
     login,
     register,
+    fetchUserProfile,
     logout,
     // Helper to check user type
     isClient: user && user.user_type === 'client',

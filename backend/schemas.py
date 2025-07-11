@@ -41,16 +41,24 @@ class UserBase(BaseModel):
     phone_number: str
     user_type: str
     location: Optional[str] = None
+    created_at: datetime # <--- ADD THIS LINE
+    updated_at: datetime
+     
 
     class Config:
         from_attributes = True # Changed from orm_mode = True in Pydantic v2
 
 class ArtisanDetails(BaseModel):
+    user_id: int
     bio: Optional[str] = None
     years_experience: Optional[int] = None
     average_rating: Optional[float] = None # Ensure this is present
     total_reviews: Optional[int] = None    # Ensure this is present
     is_available: Optional[bool] = True
+    skills: Optional[List[str]] = None
+    created_at: datetime # <--- ADD THIS LINE
+    updated_at: datetime
+    
 
     class Config:
         from_attributes = True
@@ -183,10 +191,17 @@ class UserUpdate(BaseModel):
 class ArtisanDetailsUpdate(BaseModel):
     bio: Optional[str] = None
     years_experience: Optional[int] = None
-    skills: Optional[List[str]] = None # List of skill names to update 
+    is_available: Optional[bool] = None
+    skills: Optional[List[str]] = None # List of skill names to update
+
+    class Config:
+        from_attributes = True
+ 
+
 
 class ProfileUpdate(UserUpdate): # Inherit basic user update fields
     artisan_details: Optional[ArtisanDetailsUpdate] = None
+    
 
     
 class JobsListResponse(BaseModel):

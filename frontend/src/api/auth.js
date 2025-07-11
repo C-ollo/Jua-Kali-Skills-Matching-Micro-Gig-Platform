@@ -42,3 +42,4 @@ export const updateMyProfile = async (profileData) => {
       throw error.response?.data || error.message;
   }
 };
+

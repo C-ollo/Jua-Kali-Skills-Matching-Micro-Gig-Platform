@@ -1,15 +1,10 @@
 // frontend/src/pages/ProfilePage.jsx
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { getMyProfile, updateMyProfile } from '../api/auth';
-import { useNavigate } from 'react-router-dom';
-import ClipLoader from 'react-spinners/ClipLoader';
+import { getMyProfile, updateMyProfile } from '../api/auth'; // Ensure updateMyProfile is imported
 
-function ProfilePage() {
-  console.log("ProfilePage component is rendering!");
-  const { user, loading: authLoading, logout, isAuthenticated } = useAuth();
-  const navigate = useNavigate();
-
+const ProfilePage = () => {
+  const { user, loading: authLoading, isAuthenticated, fetchUserProfile, token } = useAuth(); // Get fetchUserProfile and token
   const [profileData, setProfileData] = useState({
     full_name: '',
     email: '',
@@ -17,117 +12,108 @@ function ProfilePage() {
     location: '',
     artisan_details: {
       bio: '',
-      years_experience: 0,
-      is_available: true,
-      skills: [],
+      years_experience: '',
+      is_available: true, // Default or fetch from user.artisan_details
+      skills: [], // Initialize as an empty array
     },
   });
-
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [message, setMessage] = useState(null);
+  const [loading, setLoading] = useState(true); // Local loading state for fetching/updating
   const [isEditing, setIsEditing] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState(null);
 
-  console.log("ProfilePage: Current profileData state during render (top of component):", profileData);
+  console.log("ProfilePage component is rendering!");
 
-  const fetchProfile = useCallback(async () => {
-    console.log("fetchProfile: Function initiated.");
-    console.log("fetchProfile: isAuthenticated:", isAuthenticated, "authLoading:", authLoading);
+  // Effect to fetch profile data on mount or when user/token changes
+  useEffect(() => {
+    console.log("ProfilePage: useEffect (mount or user/token change). isAuthenticated:", isAuthenticated, "authLoading:", authLoading);
 
-    if (!isAuthenticated || authLoading) {
-      if (!authLoading && !isAuthenticated) {
-        console.log("fetchProfile: Not authenticated or still loading auth context. Redirecting to login.");
-        navigate('/login');
-      } else {
-        console.log("fetchProfile: Waiting for authentication context to finish loading.");
+    const fetchProfile = async () => {
+      // Only fetch if authenticated and authLoading is false
+      if (isAuthenticated && !authLoading && user) {
+        setLoading(true); // Start local loading
+        setMessage('');
+        setError(null);
+        try {
+          console.log("ProfilePage: Attempting to call getMyProfile()...");
+          const data = await getMyProfile();
+          console.log("ProfilePage: getMyProfile successful. Data:", data);
+          setProfileData({
+            full_name: data.full_name || '',
+            email: data.email || '',
+            phone_number: data.phone_number || '',
+            location: data.location || '',
+            artisan_details: {
+              bio: data.artisan_details?.bio || '',
+              years_experience: data.artisan_details?.years_experience || '',
+              is_available: data.artisan_details?.is_available ?? true, // Use nullish coalescing for boolean
+              skills: data.artisan_details?.skills || [], // Ensure skills is an array
+            },
+          });
+        } catch (err) {
+          console.error('ProfilePage: Error fetching profile:', err);
+          setError(err);
+          setMessage('Failed to load profile. Please try again.');
+        } finally {
+          setLoading(false); // End local loading
+        }
+      } else if (!isAuthenticated && !authLoading) {
+        // If not authenticated after auth loading, consider redirecting or showing login prompt
+        // (Though PrivateRoute should handle this, good to log)
+        console.log("ProfilePage: Not authenticated after auth loading. Cannot fetch profile.");
+        setLoading(false); // Stop loading if not authenticated
       }
-      return;
-    }
-
-    setLoading(true);
-    setError(null);
-    try {
-      console.log("fetchProfile: Attempting to call getMyProfile()...");
-      const data = await getMyProfile();
-      console.log("fetchProfile: getMyProfile() response data:", data);
-
-      setProfileData({
-        full_name: data.full_name || '',
-        email: data.email || '',
-        phone_number: data.phone_number || '',
-        location: data.location || '',
-        artisan_details: {
-          bio: data.artisan_details?.bio || '',
-          years_experience: data.artisan_details?.years_experience || 0,
-          is_available: data.artisan_details?.is_available !== undefined ? data.artisan_details.is_available : true,
-          skills: data.skills || [],
-        },
-      });
-      // TEMPORARY DELAY REMOVED
-      // console.log("ProfilePage: Data fetched and state set. Introducing a 5-second delay to observe.");
-      // await new Promise(resolve => setTimeout(resolve, 5000));
-    } catch (err) {
-      console.error('fetchProfile: Failed to fetch profile (caught error):', err);
-      setError(err.response?.data?.detail || err.message || 'Failed to load profile.');
-    } finally {
-      setLoading(false);
-      console.log("fetchProfile: finished. setLoading(false).");
-    }
-  }, [isAuthenticated, authLoading, navigate]);
-
-  // Effect to fetch profile data
-  useEffect(() => {
-    fetchProfile();
-  }, [fetchProfile]);
-
-  // New Effect for component mount/unmount logging
-  useEffect(() => {
-    console.log("ProfilePage: useEffect (mount). User type:", user?.user_type, " isAuthenticated:", isAuthenticated);
-    return () => {
-      console.log("ProfilePage: useEffect (unmount).");
     };
-  }, [user, isAuthenticated]); // Dependencies to re-log if user or isAuthenticated changes
+
+    fetchProfile();
+
+    return () => {
+      console.log("ProfilePage: useEffect (cleanup/unmount).");
+    };
+  }, [isAuthenticated, authLoading, user, token]); // Re-run if these context values change
 
   const handleChange = (e) => {
-    const { name, value } = e.target;
-    if (name.startsWith('artisan_details.')) {
-      const field = name.split('.')[1];
+    const { name, value, type, checked } = e.target;
+
+    if (name in profileData) {
+      // For top-level fields
+      setProfileData((prev) => ({ ...prev, [name]: value }));
+    } else if (name in profileData.artisan_details) {
+      // For nested artisan_details fields
       setProfileData((prev) => ({
         ...prev,
         artisan_details: {
           ...prev.artisan_details,
-          [field]: field === 'years_experience' ? parseInt(value) || 0 : value,
+          [name]: type === 'checkbox' ? checked : value,
         },
       }));
-    } else if (name === 'is_available') {
-        setProfileData((prev) => ({
-            ...prev,
-            artisan_details: {
-              ...prev.artisan_details,
-              is_available: e.target.checked,
-            },
-          }));
-    }
-    else if (name === 'skills') {
+    } else if (name === 'skills_input') {
+      // Special handling for skills input if it's a single string
       setProfileData((prev) => ({
         ...prev,
         artisan_details: {
-            ...prev.artisan_details,
-            skills: value.split(',').map(s => s.trim()).filter(s => s !== ''),
+          ...prev.artisan_details,
+          // Split by comma and trim each skill
+          skills: value.split(',').map(s => s.trim()).filter(s => s !== ''),
         },
       }));
-    } else {
-      setProfileData((prev) => ({ ...prev, [name]: value }));
     }
+  };
+
+  const handleEditToggle = () => {
+    setIsEditing((prev) => !prev);
+    setMessage(''); // Clear messages when toggling edit mode
+    setError(null);
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setLoading(true);
+    setLoading(true); // Start local loading for update
+    setMessage('');
     setError(null);
-    setMessage(null);
 
     try {
+      // Construct the data payload for the API
       const dataToUpdate = {
         full_name: profileData.full_name,
         email: profileData.email,
@@ -135,224 +121,231 @@ function ProfilePage() {
         location: profileData.location,
       };
 
-      if (user?.user_type === 'artisan') {
+      // Conditionally add artisan_details if the user is an artisan
+      if (user && user.user_type === 'artisan') {
         dataToUpdate.artisan_details = {
           bio: profileData.artisan_details.bio,
-          years_experience: profileData.artisan_details.years_experience,
+          years_experience: parseInt(profileData.artisan_details.years_experience) || 0, // Ensure it's an int
           is_available: profileData.artisan_details.is_available,
-          skills: profileData.artisan_details.skills,
+          skills: profileData.artisan_details.skills, // Send as array of strings
         };
       }
-      console.log("handleSubmit: Data being sent for update:", dataToUpdate);
-      const updatedUser = await updateMyProfile(dataToUpdate);
-      console.log("handleSubmit: Update successful, response:", updatedUser);
+
+      console.log("ProfilePage: Sending update payload:", dataToUpdate);
+      const updatedProfile = await updateMyProfile(dataToUpdate);
+      console.log("ProfilePage: Profile update successful. New data:", updatedProfile);
+
       setMessage('Profile updated successfully!');
-      setIsEditing(false);
-      await fetchProfile();
+      setError(null);
+      setIsEditing(false); // Exit edit mode after successful update
+
+      // IMPORTANT: Update AuthContext's user state to reflect changes
+      // This will trigger re-renders in components using useAuth, like Navbar
+      // For this to work, you might need an `updateUser` function in AuthContext
+      // or simply refetch the user profile using the existing `fetchUserProfile`
+      fetchUserProfile(token); // Re-fetch the user profile to update context
+
     } catch (err) {
-      console.error('handleSubmit: Failed to update profile (caught error):', err);
-      setError(err.response?.data?.detail || err.message || 'Failed to update profile.');
+      console.error('ProfilePage: Error updating profile:', err);
+      setError(err);
+      setMessage(`Failed to update profile: ${err.detail || err.message || 'Unknown error'}`);
     } finally {
-      setLoading(false);
+      setLoading(false); // End local loading
     }
   };
 
-  if (authLoading || loading) {
+  if (authLoading || loading) { // Check both AuthContext loading and local loading
     console.log("ProfilePage: Returning loading spinner due to authLoading or local loading.");
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-100">
-        <ClipLoader size={50} color={"#1a73e8"} loading={true} />
-        <p className="ml-3 text-xl text-gray-700">Loading profile...</p>
+        <p className="text-xl text-gray-700">Loading profile data...</p>
       </div>
     );
   }
 
-  // Fallback if user is somehow null at this point
-  if (!user) {
-    console.log("ProfilePage: DEBUG: user is null at this point, value:", user);
-    console.log("ProfilePage: User object is null after loading. Redirecting to /login.");
-    navigate('/login');
-    return null;
+  if (!isAuthenticated || !user) {
+    console.log("ProfilePage: Not authenticated or user not available after loading. Displaying message.");
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-100">
+        <p className="text-xl text-gray-700">Please log in to view your profile.</p>
+      </div>
+    );
   }
 
-  console.log("ProfilePage: About to render full profile JSX."); // New log before actual JSX return
+  // Determine if it's an artisan for conditional rendering
+  const isArtisan = user.user_type === 'artisan';
+
   return (
-    <div className="min-h-screen bg-gray-100 p-8">
-      <div className="max-w-3xl mx-auto bg-white p-6 rounded-lg shadow-lg">
-        <h1 className="text-3xl font-bold text-gray-800 mb-6 text-center">My Profile</h1>
+    <div className="min-h-screen bg-gray-50 p-6 flex justify-center items-start">
+      <div className="bg-white p-8 rounded-lg shadow-xl w-full max-w-2xl mt-8">
+        <h2 className="text-3xl font-extrabold text-gray-900 mb-6 text-center">Your Profile</h2>
 
         {message && (
-          <div className="bg-green-100 border-l-4 border-green-500 text-green-700 p-4 mb-4" role="alert">
-            <p>{message}</p>
-          </div>
-        )}
-        {error && (
-          <div className="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-4" role="alert">
-            <p>Error: {error}</p>
+          <div className={`p-3 mb-4 rounded-md ${error ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
+            {message}
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          {/* General User Information */}
-          <div>
-            <label htmlFor="full_name" className="block text-sm font-medium text-gray-700">Full Name</label>
-            <input
-              type="text"
-              id="full_name"
-              name="full_name"
-              value={profileData.full_name}
-              onChange={handleChange}
-              readOnly={!isEditing}
-              className={`mt-1 block w-full px-3 py-2 border ${isEditing ? 'border-gray-300' : 'border-transparent'} rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500`}
-            />
-          </div>
-          <div>
-            <label htmlFor="email" className="block text-sm font-medium text-gray-700">Email</label>
-            <input
-              type="email"
-              id="email"
-              name="email"
-              value={profileData.email}
-              onChange={handleChange}
-              readOnly={!isEditing}
-              className={`mt-1 block w-full px-3 py-2 border ${isEditing ? 'border-gray-300' : 'border-transparent'} rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500`}
-            />
-          </div>
-          <div>
-            <label htmlFor="phone_number" className="block text-sm font-medium text-gray-700">Phone Number</label>
-            <input
-              type="text"
-              id="phone_number"
-              name="phone_number"
-              value={profileData.phone_number}
-              onChange={handleChange}
-              readOnly={!isEditing}
-              className={`mt-1 block w-full px-3 py-2 border ${isEditing ? 'border-gray-300' : 'border-transparent'} rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500`}
-            />
-          </div>
-          <div>
-            <label htmlFor="location" className="block text-sm font-medium text-gray-700">Location</label>
-            <input
-              type="text"
-              id="location"
-              name="location"
-              value={profileData.location}
-              onChange={handleChange}
-              readOnly={!isEditing}
-              className={`mt-1 block w-full px-3 py-2 border ${isEditing ? 'border-gray-300' : 'border-transparent'} rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500`}
-            />
-          </div>
+        <div className="text-right mb-4">
+          <button
+            onClick={handleEditToggle}
+            className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+          >
+            {isEditing ? 'Cancel Edit' : 'Edit Profile'}
+          </button>
+        </div>
 
-          {/* Artisan Specific Information (Conditionally Rendered) */}
-          {user?.user_type === 'artisan' && (
-            <div className="pt-4 border-t border-gray-200 mt-6">
-              <h2 className="text-xl font-bold text-gray-700 mb-4">Artisan Details</h2>
-              <div>
-                <label htmlFor="artisan_details.bio" className="block text-sm font-medium text-gray-700">Bio</label>
-                <textarea
-                  id="artisan_details.bio"
-                  name="artisan_details.bio"
-                  value={profileData.artisan_details.bio}
-                  onChange={handleChange}
-                  readOnly={!isEditing}
-                  rows="3"
-                  className={`mt-1 block w-full px-3 py-2 border ${isEditing ? 'border-gray-300' : 'border-transparent'} rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500`}
-                ></textarea>
-              </div>
-              <div>
-                <label htmlFor="artisan_details.years_experience" className="block text-sm font-medium text-gray-700">Years of Experience</label>
-                <input
-                  type="number"
-                  id="artisan_details.years_experience"
-                  name="artisan_details.years_experience"
-                  value={profileData.artisan_details.years_experience}
-                  onChange={handleChange}
-                  readOnly={!isEditing}
-                  min="0"
-                  className={`mt-1 block w-full px-3 py-2 border ${isEditing ? 'border-gray-300' : 'border-transparent'} rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500`}
-                />
-              </div>
-              <div className="flex items-center mt-2">
-                <input
-                  type="checkbox"
-                  id="is_available"
-                  name="is_available"
-                  checked={profileData.artisan_details.is_available}
-                  onChange={handleChange}
-                  disabled={!isEditing}
-                  className="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
-                />
-                <label htmlFor="is_available" className="ml-2 block text-sm font-medium text-gray-700">Available for Work</label>
-              </div>
-              <div>
-                <label htmlFor="artisan_details.skills" className="block text-sm font-medium text-gray-700">Skills (comma-separated)</label>
+        <form onSubmit={handleSubmit}>
+          {/* General User Details */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Full Name</label>
+              {isEditing ? (
                 <input
                   type="text"
-                  id="artisan_details.skills"
-                  name="skills"
-                  value={profileData.artisan_details.skills.join(', ')}
+                  name="full_name"
+                  value={profileData.full_name}
                   onChange={handleChange}
-                  readOnly={!isEditing}
-                  className={`mt-1 block w-full px-3 py-2 border ${isEditing ? 'border-gray-300' : 'border-transparent'} rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500`}
-                  placeholder="e.g., Plumbing, Electrical, Carpentry"
+                  className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
                 />
+              ) : (
+                <p className="mt-1 text-gray-900">{profileData.full_name}</p>
+              )}
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Email</label>
+              {isEditing ? (
+                <input
+                  type="email"
+                  name="email"
+                  value={profileData.email}
+                  onChange={handleChange}
+                  className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                />
+              ) : (
+                <p className="mt-1 text-gray-900">{profileData.email}</p>
+              )}
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Phone Number</label>
+              {isEditing ? (
+                <input
+                  type="text"
+                  name="phone_number"
+                  value={profileData.phone_number}
+                  onChange={handleChange}
+                  className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                />
+              ) : (
+                <p className="mt-1 text-gray-900">{profileData.phone_number}</p>
+              )}
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Location</label>
+              {isEditing ? (
+                <input
+                  type="text"
+                  name="location"
+                  value={profileData.location}
+                  onChange={handleChange}
+                  className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                />
+              ) : (
+                <p className="mt-1 text-gray-900">{profileData.location}</p>
+              )}
+            </div>
+          </div>
+
+          {/* Artisan Specific Details (conditionally rendered) */}
+          {isArtisan && (
+            <div className="border-t border-gray-200 pt-6 mt-6">
+              <h3 className="text-2xl font-semibold text-gray-800 mb-4">Artisan Details</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Bio</label>
+                  {isEditing ? (
+                    <textarea
+                      name="bio"
+                      value={profileData.artisan_details.bio}
+                      onChange={handleChange}
+                      rows="3"
+                      className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                    ></textarea>
+                  ) : (
+                    <p className="mt-1 text-gray-900">{profileData.artisan_details.bio || 'N/A'}</p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Years Experience</label>
+                  {isEditing ? (
+                    <input
+                      type="number"
+                      name="years_experience"
+                      value={profileData.artisan_details.years_experience}
+                      onChange={handleChange}
+                      min="0"
+                      className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                    />
+                  ) : (
+                    <p className="mt-1 text-gray-900">{profileData.artisan_details.years_experience || '0'} years</p>
+                  )}
+                </div>
+                <div className="col-span-1 md:col-span-2">
+                  <label className="block text-sm font-medium text-gray-700">Skills (comma-separated)</label>
+                  {isEditing ? (
+                    <input
+                      type="text"
+                      name="skills_input" // Use a distinct name for the input
+                      value={profileData.artisan_details.skills.join(', ')} // Join array for display
+                      onChange={handleChange}
+                      className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                    />
+                  ) : (
+                    <p className="mt-1 text-gray-900">{profileData.artisan_details.skills.join(', ') || 'N/A'}</p>
+                  )}
+                </div>
+                <div className="col-span-1 md:col-span-2 flex items-center">
+                    {isEditing ? (
+                        <>
+                            <input
+                                type="checkbox"
+                                name="is_available"
+                                id="is_available"
+                                checked={profileData.artisan_details.is_available}
+                                onChange={handleChange}
+                                className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                            />
+                            <label htmlFor="is_available" className="ml-2 block text-sm text-gray-900">
+                                Available for Jobs
+                            </label>
+                        </>
+                    ) : (
+                        <p className="mt-1 text-gray-900">
+                            Status: <span className={`font-semibold ${profileData.artisan_details.is_available ? 'text-green-600' : 'text-red-600'}`}>
+                                {profileData.artisan_details.is_available ? 'Available' : 'Not Available'}
+                            </span>
+                        </p>
+                    )}
+                </div>
               </div>
             </div>
           )}
 
-          <div className="flex justify-end gap-4 mt-6">
-            {!isEditing && (
+          {isEditing && (
+            <div className="mt-8 flex justify-end">
               <button
-                type="button"
-                onClick={() => setIsEditing(true)}
-                className="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-md transition duration-300"
+                type="submit"
+                className="px-6 py-3 bg-green-600 text-white rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
+                disabled={loading} // Disable button while loading
               >
-                Edit Profile
+                {loading ? 'Saving...' : 'Save Changes'}
               </button>
-            )}
-
-            {isEditing && (
-              <>
-                <button
-                  type="submit"
-                  className="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded-md transition duration-300"
-                  disabled={loading}
-                >
-                  {loading ? 'Saving...' : 'Save Changes'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsEditing(false);
-                    setLoading(true);
-                    fetchProfile();
-                  }}
-                  className="bg-gray-400 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-md transition duration-300"
-                >
-                  Cancel
-                </button>
-              </>
-            )}
-          </div>
+            </div>
+          )}
         </form>
-
-        <div className="mt-8 text-center">
-          <button
-            onClick={() => navigate('/dashboard')}
-            className="text-blue-600 hover:text-blue-800 font-semibold py-2 px-4 rounded-md"
-          >
-            Back to Dashboard
-          </button>
-          <button
-            onClick={logout}
-            className="ml-4 bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-6 rounded-md transition duration-300"
-          >
-            Logout
-          </button>
-        </div>
       </div>
     </div>
   );
-}
+};
 
 export default ProfilePage;
