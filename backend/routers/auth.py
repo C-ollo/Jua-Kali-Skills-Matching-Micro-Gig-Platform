@@ -137,6 +137,10 @@ async def register_user(user_data: RegisterUser, db: Any = Depends(get_db_connec
         # FastAPI's Depends(get_db_connection) handles putting the connection back.
         pass
 
+@router.options("/login")
+async def options_login():
+    return {}
+
 @router.post("/login", response_model=dict) # Updated response model
 async def login_for_access_token(form_data: LoginUser, db: Any = Depends(get_db_connection)):
     conn = db # Use the injected connection

@@ -1,12 +1,12 @@
 # backend/routers/job.py
 
 from fastapi import APIRouter, HTTPException, Depends, status, Query
-from backend.database import get_db_connection, put_db_connection
+from backend.database import get_db_connection
 from backend.schemas import *
 from backend.routers.notification import create_notification
 from backend.routers.auth import get_current_user # To get the authenticated user
 from psycopg2.extras import execute_values
-from typing import List
+from typing import List, Optional
 
 router = APIRouter(
     prefix="/api/jobs", # All routes in this router will start with /api/jobs
@@ -16,7 +16,8 @@ router = APIRouter(
 @router.post("/", response_model=JobResponse, status_code=status.HTTP_201_CREATED)
 async def create_job(
     job_data: JobCreate,
-    current_user: UserBase = Depends(get_current_user)
+    current_user: UserBase = Depends(get_current_user),
+    conn = Depends(get_db_connection)
 ):
     # Ensure only clients can post jobs
     if current_user.user_type != UserType.client:
@@ -25,9 +26,7 @@ async def create_job(
             detail="Only clients can post jobs."
         )
 
-    conn = None
     try:
-        conn = get_db_connection()
         cursor = conn.cursor()
 
         # 1. Validate required skills
@@ -91,8 +90,7 @@ async def create_job(
         print(f"Error creating job: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to create job due to server error")
     finally:
-        if conn:
-            put_db_connection(conn)
+        pass # FastAPI handles connection closing via Depends
 
 @router.get("/", response_model=JobsListResponse) # <--- Change response_model here
 async def get_all_jobs(
@@ -101,13 +99,12 @@ async def get_all_jobs(
     min_budget: Optional[float] = Query(None, ge=0, description="Minimum budget for the job"),
     max_budget: Optional[float] = Query(None, ge=0, description="Maximum budget for the job"),
     status_filter: Optional[JobStatus] = Query(None, description="Filter jobs by status (open, assigned, completed, cancelled)"),
-    page: int = Query(1, ge=1, description="Page number for pagination"),
+    page: int = Query(1, ge=1, le=100, description="Page number for pagination"),
     size: int = Query(10, ge=1, le=100, description="Number of items per page"),
-    current_user: UserBase = Depends(get_current_user) # Keep authentication
+    current_user: UserBase = Depends(get_current_user), # Keep authentication
+    conn = Depends(get_db_connection)
 ):
-    conn = None
     try:
-        conn = get_db_connection()
         cursor = conn.cursor()
 
         # Base query parts
@@ -232,16 +229,12 @@ async def get_all_jobs(
         print(f"Error fetching jobs: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Server error fetching jobs")
     finally:
-        if conn:
-            put_db_connection(conn)
+        pass # FastAPI handles connection closing via Depends
   
 
-
 @router.get("/{job_id}", response_model=JobResponse)
-async def get_job_by_id(job_id: int):
-    conn = None
+async def get_job_by_id(job_id: int, conn = Depends(get_db_connection)):
     try:
-        conn = get_db_connection()
         cursor = conn.cursor()
 
         cursor.execute(
@@ -255,12 +248,14 @@ async def get_job_by_id(job_id: int):
                 j.budget,
                 j.status,
                 j.created_at,
-                ARRAY_AGG(s.name ORDER BY s.name) AS required_skills_array
+                ARRAY_AGG(s.name ORDER BY s.name) FILTER (WHERE s.name IS NOT NULL) AS required_skills_array,
+                CASE WHEN jr.id IS NOT NULL THEN TRUE ELSE FALSE END AS reviewed
             FROM jobs j
             LEFT JOIN job_required_skills jrs ON j.id = jrs.job_id
             LEFT JOIN skills s ON jrs.skill_id = s.id
+            LEFT JOIN job_reviews jr ON j.id = jr.job_id
             WHERE j.id = %s
-            GROUP BY j.id, j.client_id, j.title, j.description, j.location, j.budget, j.status, j.created_at;
+            GROUP BY j.id, j.client_id, j.title, j.description, j.location, j.budget, j.status, j.created_at, jr.id;
             """,
             (job_id,)
         )
@@ -270,7 +265,7 @@ async def get_job_by_id(job_id: int):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
 
         (job_id, client_id, title, description, location, budget,
-         status_str, created_at, required_skills_array) = job_row
+         status_str, created_at, required_skills_array, reviewed) = job_row
 
         status_enum = JobStatus(status_str)
         parsed_skills = [s for s in (required_skills_array if required_skills_array else []) if s is not None]
@@ -293,32 +288,34 @@ async def get_job_by_id(job_id: int):
         print(f"Error fetching job by ID {job_id}: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Server error fetching job")
     finally:
-        if conn:
-            put_db_connection(conn)                      
+        pass # FastAPI handles connection closing via Depends                      
 
 @router.put("/{job_id}", response_model=JobResponse)
 async def update_job(
     job_id: int,
     job_data: JobCreate, # Expects a full update of the job
-    current_user: UserBase = Depends(get_current_user)
+    current_user: UserBase = Depends(get_current_user),
+    conn = Depends(get_db_connection)
 ):
-    conn = None
     try:
-        conn = get_db_connection()
         cursor = conn.cursor()
 
-        # 1. Fetch the existing job to check ownership and existence
-        cursor.execute("SELECT client_id FROM jobs WHERE id = %s", (job_id,))
-        job_owner_row = cursor.fetchone()
+        # 1. Fetch the existing job to check ownership, existence, and CURRENT STATUS
+        cursor.execute("SELECT client_id, status, assigned_artisan_id FROM jobs WHERE id = %s", (job_id,))
+        job_details_row = cursor.fetchone()
 
-        if job_owner_row is None:
+        if job_details_row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
 
-        existing_client_id = job_owner_row[0]
+        existing_client_id, current_job_status_str, assigned_artisan_id = job_details_row
+        current_job_status = JobStatus(current_job_status_str) # Convert to Enum
 
         # 2. Authorization Check: Ensure current user is the job owner
         if current_user.id != existing_client_id:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to update this job")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to update this job"
+            )
 
         # 3. Validate required skills (same logic as create_job)
         found_skill_ids = []
@@ -334,7 +331,6 @@ async def update_job(
                     invalid_skills.append(skill_name)
 
         if invalid_skills:
-            # No rollback needed here yet, as no changes were made to the DB
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"The following required skills are not recognized: {', '.join(invalid_skills)}. Please choose from available skills."
@@ -344,16 +340,16 @@ async def update_job(
         cursor.execute(
             """
             UPDATE jobs
-            SET title = %s, description = %s, location = %s, budget = %s, status = %s, updated_at = CURRENT_TIMESTAMP
+            SET title = %s, description = %s, location = %s, budget = %s,
+                status = %s, assigned_artisan_id = %s, updated_at = CURRENT_TIMESTAMP
             WHERE id = %s RETURNING id, client_id, created_at
             """,
             (job_data.title, job_data.description, job_data.location,
-             job_data.budget, job_data.status.value, job_id)
+             job_data.budget, requested_status.value, assigned_artisan_id, job_id) # Use requested_status and potentially updated assigned_artisan_id
         )
-        updated_job_id, client_id, created_at = cursor.fetchone() # Fetch updated values
+        updated_job_id, client_id, created_at = cursor.fetchone()
 
-        # 5. Update job_required_skills linking table
-        #    (Delete existing skills and then re-insert new ones)
+        # 5. Update job_required_skills linking table (delete existing, then re-insert new)
         cursor.execute("DELETE FROM job_required_skills WHERE job_id = %s", (job_id,))
 
         if found_skill_ids:
@@ -374,29 +370,28 @@ async def update_job(
             location=job_data.location,
             budget=job_data.budget,
             required_skills=job_data.required_skills,
-            status=job_data.status,
-            created_at=created_at # created_at doesn't change on update
+            status=requested_status, # Return the new status
+            assigned_artisan_id=assigned_artisan_id, # Return the potentially updated assigned_artisan_id
+            created_at=created_at
         )
 
     except HTTPException:
-        conn.rollback() # Ensure rollback on HTTPException
+        conn.rollback()
         raise
     except Exception as e:
-        conn.rollback() # Rollback on any other unexpected error
+        conn.rollback()
         print(f"Error updating job {job_id}: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update job due to server error")
     finally:
-        if conn:
-            put_db_connection(conn)            
+        pass # FastAPI handles connection closing via Depends            
 
 @router.delete("/{job_id}", status_code=status.HTTP_204_NO_CONTENT) # No content on successful deletion
 async def delete_job(
     job_id: int,
-    current_user: UserBase = Depends(get_current_user)
+    current_user: UserBase = Depends(get_current_user),
+    conn = Depends(get_db_connection)
 ):
-    conn = None
     try:
-        conn = get_db_connection()
         cursor = conn.cursor()
 
         # 1. Fetch the existing job to check ownership
@@ -427,18 +422,16 @@ async def delete_job(
         print(f"Error deleting job {job_id}: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to delete job due to server error")
     finally:
-        if conn:
-            put_db_connection(conn)
+        pass # FastAPI handles connection closing via Depends
 
 @router.post("/{job_id}/apply", response_model=JobApplicationResponse, status_code=status.HTTP_201_CREATED)
 async def apply_for_job(
     job_id: int,
     application_data: JobApplicationCreate,
-    current_user: UserBase = Depends(get_current_user)
+    current_user: UserBase = Depends(get_current_user),
+    conn = Depends(get_db_connection)
 ):
-    conn = None
     try:
-        conn = get_db_connection()
         cursor = conn.cursor()
 
         # 1. Authorization Check: Only Artisans can apply
@@ -505,17 +498,15 @@ async def apply_for_job(
         print(f"Error applying for job {job_id} by artisan {current_user.id}: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to submit application due to server error")
     finally:
-        if conn:
-            put_db_connection(conn)
+        pass # FastAPI handles connection closing via Depends
 
 @router.get("/{job_id}/applications", response_model=List[JobApplicationDetailResponse])
 async def get_applications_for_job(
     job_id: int,
-    current_user: UserBase = Depends(get_current_user)
+    current_user: UserBase = Depends(get_current_user),
+    conn = Depends(get_db_connection)
 ):
-    conn = None
     try:
-        conn = get_db_connection()
         cursor = conn.cursor()
 
         # 1. Check if the job exists and if the current user is its owner (client)
@@ -591,18 +582,16 @@ async def get_applications_for_job(
         print(f"Error fetching applications for job {job_id}: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Server error fetching applications")
     finally:
-        if conn:
-            put_db_connection(conn)            
+        pass # FastAPI handles connection closing via Depends            
 
 @router.patch("/applications/{application_id}", response_model=JobApplicationDetailResponse)
 async def update_application_status(
     application_id: int,
     status_update: ApplicationStatusUpdate,
-    current_user: UserBase = Depends(get_current_user)
+    current_user: UserBase = Depends(get_current_user),
+    conn = Depends(get_db_connection)
 ):
-    conn = None
     try:
-        conn = get_db_connection()
         cursor = conn.cursor()
 
         # 1. Fetch the application and associated job details
@@ -687,7 +676,7 @@ async def update_application_status(
                 message=f"Your application for job '{job_title}' has been accepted!",
                 notification_type=NotificationType.application_accepted,
                 entity_id=job_id,
-                conn=conn # Pass the existing connection for transaction
+                conn=conn # Pass the connection for transactional consistency
             )
             # --- END NEW NOTIFICATION CODE ---
 
@@ -742,162 +731,14 @@ async def update_application_status(
         print(f"Error updating application {application_id} status: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update application status due to server error")
     finally:
-        if conn:
-            put_db_connection(conn)
-
-@router.put("/{job_id}", response_model=JobResponse)
-async def update_job(
-    job_id: int,
-    job_data: JobCreate, # Expects a full update of the job
-    current_user: UserBase = Depends(get_current_user)
-):
-    conn = None
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-
-        # 1. Fetch the existing job to check ownership, existence, and CURRENT STATUS
-        cursor.execute("SELECT client_id, status, assigned_artisan_id FROM jobs WHERE id = %s", (job_id,))
-        job_details_row = cursor.fetchone()
-
-        if job_details_row is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
-
-        existing_client_id, current_job_status_str, assigned_artisan_id = job_details_row
-        current_job_status = JobStatus(current_job_status_str) # Convert to Enum
-
-        # 2. Authorization Check: Ensure current user is the job owner
-        if current_user.id != existing_client_id:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to update this job")
-
-        # --- NEW STATUS TRANSITION LOGIC ---
-        requested_status = job_data.status
-
-        if requested_status != current_job_status: # Only apply logic if status is actually changing
-            if current_job_status == JobStatus.completed or current_job_status == JobStatus.cancelled:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Cannot change status of an already {current_job_status.value} job."
-                )
-
-            if requested_status == JobStatus.completed:
-                if current_job_status != JobStatus.assigned:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="Only an 'assigned' job can be marked 'completed'."
-                    )
-                if assigned_artisan_id is None:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="Job must have an assigned artisan to be marked 'completed'."
-                    )
-                # No other logic needed for completion, status update handles it
-
-            elif requested_status == JobStatus.cancelled:
-                # Can cancel from 'open' or 'assigned'
-                if current_job_status == JobStatus.assigned and assigned_artisan_id is not None:
-                    # If cancelling an assigned job, de-assign the artisan
-                    assigned_artisan_id = None # Will be set to NULL in DB update
-
-                # Optionally, reject all pending applications if cancelling an 'open' job
-                if current_job_status == JobStatus.open:
-                    cursor.execute(
-                        "UPDATE job_applications SET status = %s, updated_at = CURRENT_TIMESTAMP WHERE job_id = %s AND status = %s",
-                        (JobApplicationStatus.rejected.value, job_id, JobApplicationStatus.pending.value)
-                    )
-            elif requested_status == JobStatus.assigned:
-                # Prevent setting to assigned directly, should happen via application acceptance
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Job status 'assigned' is set by accepting an application, not direct update."
-                )
-            elif requested_status == JobStatus.open:
-                # Prevent setting back to open from assigned/completed/cancelled
-                if current_job_status != JobStatus.open:
-                     raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="Cannot revert job status to 'open' from current state."
-                    )
-        # --- END NEW STATUS TRANSITION LOGIC ---
-
-
-        # 3. Validate required skills (same logic as create_job)
-        found_skill_ids = []
-        invalid_skills = []
-        # ... (existing skill validation code, no changes here) ...
-        if job_data.required_skills:
-            for skill_name in job_data.required_skills:
-                cursor.execute("SELECT id FROM skills WHERE name = %s", (skill_name,))
-                skill_row = cursor.fetchone()
-                if skill_row:
-                    found_skill_ids.append(skill_row[0])
-                else:
-                    invalid_skills.append(skill_name)
-
-        if invalid_skills:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"The following required skills are not recognized: {', '.join(invalid_skills)}. Please choose from available skills."
-            )
-
-        # 4. Update the main jobs table
-        cursor.execute(
-            """
-            UPDATE jobs
-            SET title = %s, description = %s, location = %s, budget = %s,
-                status = %s, assigned_artisan_id = %s, updated_at = CURRENT_TIMESTAMP
-            WHERE id = %s RETURNING id, client_id, created_at
-            """,
-            (job_data.title, job_data.description, job_data.location,
-             job_data.budget, requested_status.value, assigned_artisan_id, job_id) # Use requested_status and potentially updated assigned_artisan_id
-        )
-        updated_job_id, client_id, created_at = cursor.fetchone()
-
-        # 5. Update job_required_skills linking table (delete existing, then re-insert new)
-        # ... (existing skill update code, no changes here) ...
-        cursor.execute("DELETE FROM job_required_skills WHERE job_id = %s", (job_id,))
-
-        if found_skill_ids:
-            job_skill_values = [(job_id, skill_id) for skill_id in found_skill_ids]
-            execute_values(cursor,
-                "INSERT INTO job_required_skills (job_id, skill_id) VALUES %s",
-                job_skill_values
-            )
-
-        conn.commit()
-
-        # 6. Prepare and return the updated JobResponse
-        return JobResponse(
-            id=updated_job_id,
-            client_id=client_id,
-            title=job_data.title,
-            description=job_data.description,
-            location=job_data.location,
-            budget=job_data.budget,
-            required_skills=job_data.required_skills,
-            status=requested_status, # Return the new status
-            assigned_artisan_id=assigned_artisan_id, # Return the potentially updated assigned_artisan_id
-            created_at=created_at
-        )
-
-    except HTTPException:
-        conn.rollback()
-        raise
-    except Exception as e:
-        conn.rollback()
-        print(f"Error updating job {job_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update job due to server error")
-    finally:
-        if conn:
-            put_db_connection(conn)
+        pass # FastAPI handles connection closing via Depends
 
 @router.get("/applications/me", response_model=List[ArtisanApplicationListResponse])
 async def get_my_applications(
-    current_user: UserBase = Depends(get_current_user)
+    current_user: UserBase = Depends(get_current_user),
+    conn = Depends(get_db_connection)
 ):
-    conn = None
     try:
-        conn = get_db_connection()
         cursor = conn.cursor()
 
         # 1. Authorization Check: Only Artisans can view their applications
@@ -975,16 +816,14 @@ async def get_my_applications(
         print(f"Error fetching applications for artisan {current_user.id}: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Server error fetching applications")
     finally:
-        if conn:
-            put_db_connection(conn)        
+        pass # FastAPI handles connection closing via Depends        
 
 @router.get("/assigned/me", response_model=List[JobResponse])
 async def get_my_assigned_jobs(
-    current_user: UserBase = Depends(get_current_user)
+    current_user: UserBase = Depends(get_current_user),
+    conn = Depends(get_db_connection)
 ):
-    conn = None
     try:
-        conn = get_db_connection()
         cursor = conn.cursor()
 
         # 1. Authorization Check: Only Artisans can view their assigned jobs
@@ -1054,23 +893,25 @@ async def get_my_assigned_jobs(
         print(f"Error fetching assigned jobs for artisan {current_user.id}: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Server error fetching assigned jobs")
     finally:
-        if conn:
-            put_db_connection(conn)
+        pass # FastAPI handles connection closing via Depends
 
 @router.put("/{job_id}/complete", response_model=JobResponse)
 async def complete_job(
     job_id: int,
-    current_user: UserBase = Depends(get_current_user)
+    current_user: UserBase = Depends(get_current_user),
+    conn = Depends(get_db_connection)
 ):
-    conn = None
     try:
-        conn = get_db_connection()
         cursor = conn.cursor()
 
         # 1. Fetch job details (including required_skills and title for notification)
         # Assuming required_skills is stored as a list of strings (e.g., TEXT[]) in your DB
         cursor.execute(
-            "SELECT client_id, status, assigned_artisan_id, title, required_skills FROM jobs WHERE id = %s",
+            """
+            SELECT
+                client_id, status, assigned_artisan_id, title
+            FROM jobs WHERE id = %s
+            """,
             (job_id,)
         )
         job_details = cursor.fetchone()
@@ -1078,7 +919,7 @@ async def complete_job(
         if not job_details:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found.")
 
-        client_id, current_status_str, assigned_artisan_id, job_title, required_skills_db = job_details
+        client_id, current_status_str, assigned_artisan_id, job_title = job_details
 
         # 2. Authorization: Only the job's client can mark it complete
         if current_user.user_type != UserType.client or current_user.id != client_id:
@@ -1135,7 +976,7 @@ async def complete_job(
             budget=updated_job_row[6],
             created_at=updated_job_row[7],
             updated_at=updated_job_row[8], # Corrected typo here
-            required_skills=updated_job_row[9] if updated_job_row[9] else [], # Directly use the list of strings
+            required_skills=[],
             assigned_artisan_id=updated_job_row[10]
         )
 
@@ -1147,6 +988,5 @@ async def complete_job(
         print(f"Error completing job {job_id}: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Server error completing job.")
     finally:
-        if conn:
-            put_db_connection(conn)
+        pass # FastAPI handles connection closing via Depends
           

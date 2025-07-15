@@ -10,10 +10,8 @@ router = APIRouter(
 )
 
 @router.get("/", response_model=List[Dict[str, int | str]]) # Example response model for skills
-async def get_all_skills():
-    conn = None
+async def get_all_skills(conn = Depends(get_db_connection)):
     try:
-        conn = get_db_connection()
         cursor = conn.cursor()
 
         cursor.execute("SELECT id, name FROM skills ORDER BY name")
@@ -26,6 +24,5 @@ async def get_all_skills():
         print(f"Error fetching skills: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Server error fetching skills")
     finally:
-        if conn:
-            put_db_connection(conn)
+        pass # FastAPI handles connection closing via Depends
 

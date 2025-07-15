@@ -94,6 +94,7 @@ class JobResponse(JobBase):
     client_id: int # The ID of the user (client) who posted the job
     created_at: datetime # When the job was posted
     assigned_artisan_id: Optional[int] = None
+    reviewed: bool = False # Indicates if the job has been reviewed
 
     class Config:
         from_attributes = True # Changed from orm_mode=True for Pydantic V2    

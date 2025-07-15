@@ -1,35 +1,8 @@
-import React, { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
-import { useAuth } from '../contexts/AuthContext';
+import React from 'react';
+import { useNavigate } from 'react-router-dom';
 
-function LoginPage() {
-  const [credentials, setCredentials] = useState({
-    email: '',
-    password: '',
-  });
-  const [message, setMessage] = useState('');
-  const [error, setError] = useState(null);
+function AboutUsPage() {
   const navigate = useNavigate();
-  const { login } = useAuth();
-
-  const handleChange = (e) => {
-    const { name, value } = e.target;
-    setCredentials((prevCreds) => ({ ...prevCreds, [name]: value }));
-  };
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setMessage('');
-    setError(null);
-
-    try {
-      await login(credentials);
-      setMessage('Login successful!');
-    } catch (err) {
-      console.error('Login error:', err);
-      setError(err);
-    }
-  };
 
   return (
     <div className="relative flex size-full min-h-screen flex-col bg-white group/design-root overflow-x-hidden">
@@ -85,67 +58,13 @@ function LoginPage() {
           <div className="layout-content-container flex flex-col max-w-[960px] flex-1">
             <div className="flex flex-col gap-10 px-4 py-10 @container">
               <div className="flex flex-col gap-4">
-                <h1 className="text-[#181211] tracking-light text-[32px] font-bold leading-tight @[480px]:text-4xl @[480px]:font-black @[480px]:leading-tight @[480px]:tracking-[-0.033em] max-w-[720px]">
-                  Login
+                <h1
+                  className="text-[#181211] tracking-light text-[32px] font-bold leading-tight @[480px]:text-4xl @[480px]:font-black @[480px]:leading-tight @[480px]:tracking-[-0.033em] max-w-[720px]"
+                >
+                  About Us
                 </h1>
-                {message && <p className="text-green-600 text-center mb-4">{message}</p>}
-
-                {error && (
-                  <div className="text-red-600 text-center mb-4 p-2 border border-red-300 bg-red-50 rounded">
-                    {typeof error === 'string' ? (
-                      error
-                    ) : (
-                      Array.isArray(error.detail) ? (
-                        <ul className="list-disc list-inside text-left">
-                          {error.detail.map((errItem, index) => (
-                            <li key={index}>
-                              {errItem.loc && errItem.loc.length > 1 ? `${errItem.loc[1]}: ` : ''}
-                              {errItem.msg}
-                            </li>
-                          ))}
-                        </ul>
-                      ) : (
-                        'An unexpected error occurred. ' + (error.message || JSON.stringify(error))
-                      )
-                    )}
-                  </div>
-                )}
-
-                <form onSubmit={handleSubmit} className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700">Email</label>
-                    <input
-                      type="email"
-                      name="email"
-                      value={credentials.email}
-                      onChange={handleChange}
-                      required
-                      className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700">Password</label>
-                    <input
-                      type="password"
-                      name="password"
-                      value={credentials.password}
-                      onChange={handleChange}
-                      required
-                      className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-                    />
-                  </div>
-                  <button
-                    type="submit"
-                    className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
-                  >
-                    Login
-                  </button>
-                </form>
-                <p className="mt-4 text-center text-sm text-gray-600">
-                  Don't have an account?{' '}
-                  <Link to="/register" className="font-medium text-blue-600 hover:text-blue-500">
-                    Register here
-                  </Link>
+                <p className="text-[#181211] text-base font-normal leading-normal max-w-[720px]">
+                  SkillConnect is a platform that connects clients with skilled artisans. Our mission is to provide a reliable and efficient way for people to find the right professionals for their home projects, repairs, and more.
                 </p>
               </div>
             </div>
@@ -168,4 +87,4 @@ function LoginPage() {
   );
 }
 
-export default LoginPage;
+export default AboutUsPage;

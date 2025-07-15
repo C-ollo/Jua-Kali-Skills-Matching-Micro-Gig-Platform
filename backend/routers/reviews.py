@@ -137,5 +137,43 @@ async def create_review(
         print(f"Error creating review: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Server error creating review.")
     finally:
-        if conn:
-            put_db_connection(conn)
+        pass # FastAPI handles connection closing via Depends
+
+@router.get("/artisan/{artisan_id}", response_model=List[ReviewResponse])
+async def get_reviews_for_artisan(
+    artisan_id: int,
+    conn = Depends(get_db_connection)
+):
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT
+                jr.id, jr.job_id, jr.client_id, jr.artisan_id, jr.rating, jr.comment, jr.created_at, jr.updated_at,
+                u.full_name AS client_full_name
+            FROM job_reviews jr
+            JOIN users u ON jr.client_id = u.id
+            WHERE jr.artisan_id = %s
+            ORDER BY jr.created_at DESC;
+            """,
+            (artisan_id,)
+        )
+        reviews_data = cursor.fetchall()
+
+        reviews_list = []
+        for row in reviews_data:
+            (id, job_id, client_id, artisan_id, rating, comment, created_at, updated_at, client_full_name) = row
+            reviews_list.append(
+                ReviewResponse(
+                    id=id, job_id=job_id, client_id=client_id, artisan_id=artisan_id,
+                    rating=rating, comment=comment, created_at=created_at, updated_at=updated_at,
+                    client_full_name=client_full_name
+                )
+            )
+        return reviews_list
+
+    except Exception as e:
+        print(f"Error fetching reviews for artisan {artisan_id}: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Server error fetching reviews.")
+    finally:
+        pass # FastAPI handles connection closing via Depends

@@ -10,6 +10,16 @@ import RegisterPage from './pages/RegisterPage';
 import DashboardPage from './pages/DashboardPage';
 import NotFoundPage from './pages/NotFoundPage';
 import ProfilePage from './pages/ProfilePage';
+import JobDetailPage from './pages/JobDetailPage';
+
+import ServicesPage from './pages/ServicesPage';
+
+import ArtisanProfilePage from './pages/ArtisanProfilePage';
+
+import AboutUsPage from './pages/AboutUsPage';
+import ContactPage from './pages/ContactPage';
+import TermsPage from './pages/TermsPage';
+import PrivacyPage from './pages/PrivacyPage';
 
 // Import AuthProvider and useAuth from your context
 import { AuthProvider, useAuth } from './contexts/AuthContext';
@@ -25,10 +35,16 @@ function App() {
           {/* Note: I'm making '/' redirect to login, as it's common for authenticated apps. 
                      If you want a public homepage, keep <Route path="/" element={<HomePage />} />
                      and remove the Navigate below. */}
-          <Route path="/" element={<Navigate replace to="/login" />} /> {/* Redirect root to login */}
+          <Route path="/" element={<Navigate replace to="/home" />} /> {/* Redirect root to login */}
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />
-          <Route path="/home" element={<HomePage />} /> {/* Keep HomePage if you want a public one */}
+          <Route path="/home" element={<HomePage />} />
+          <Route path="/services" element={<ServicesPage />} />
+          <Route path="/artisans/:artisan_id" element={<ArtisanProfilePage />} />
+          <Route path="/about" element={<AboutUsPage />} />
+          <Route path="/contact" element={<ContactPage />} />
+          <Route path="/terms" element={<TermsPage />} />
+          <Route path="/privacy" element={<PrivacyPage />} /> {/* Keep HomePage if you want a public one */}
 
           {/* Authenticated Routes */}
           <Route
@@ -48,6 +64,16 @@ function App() {
             }
           />
 
+          {/* Catch-all for 404 - make sure NotFoundPage component exists */}
+          {/* If you don't have NotFoundPage, change to <Route path="*" element={<Navigate replace to="/login" />} /> */}
+          <Route
+            path="/jobs/:job_id"
+            element={
+              <PrivateRoute>
+                <JobDetailPage />
+              </PrivateRoute>
+            }
+          />
           {/* Catch-all for 404 - make sure NotFoundPage component exists */}
           {/* If you don't have NotFoundPage, change to <Route path="*" element={<Navigate replace to="/login" />} /> */}
           <Route path="*" element={<NotFoundPage />} />
